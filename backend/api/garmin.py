@@ -1,0 +1,56 @@
+"""Garmin API router (HTTP layer).
+
+Prefix /api is added when included by server.py (api_router has prefix /api).
+Final routes: /api/garmin/*
+
+NON-NEGOTIABLE: no Garmin password is ever accepted from the client.
+The connect endpoint takes only a user_id (auth abstracted backend-side).
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Request
+from pydantic import BaseModel
+
+from garmin import service as garmin_service
+
+garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
+
+
+class GarminConnectRequest(BaseModel):
+    # Optional, testing-only hook to exercise the MFA (Mode 2) code path.
+    simulate_mfa: bool = False
+
+
+@garmin_router.post("/connect")
+async def connect_garmin(request: Request, body: Optional[GarminConnectRequest] = None, user_id: str = "default"):
+    db = request.app.state.db
+    simulate_mfa = bool(body.simulate_mfa) if body else False
+    return await garmin_service.connect(db, user_id, simulate_mfa=simulate_mfa)
+
+
+@garmin_router.post("/sync")
+async def sync_garmin(request: Request, user_id: str = "default"):
+    db = request.app.state.db
+    return await garmin_service.sync(db, user_id)
+
+
+@garmin_router.get("/status")
+async def garmin_status(request: Request, user_id: str = "default"):
+    db = request.app.state.db
+    return await garmin_service.get_status(db, user_id)
+
+
+@garmin_router.post("/disconnect")
+async def disconnect_garmin(request: Request, user_id: str = "default"):
+    db = request.app.state.db
+    return await garmin_service.disconnect(db, user_id)
+
+
+@garmin_router.get("/activities")
+async def garmin_activities(request: Request, user_id: str = "default", limit: int = 20):
+    db = request.app.state.db
+    items = await garmin_service.list_activities(db, user_id, limit=limit)
+    return {"activities": items, "count": len(items)}

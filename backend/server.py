@@ -5546,6 +5546,10 @@ async def verify_checkout_session(session_id: str, user_id: str = "default"):
 # Register mock runner endpoints under /api
 api_router.include_router(mock_runner_router)
 
+# Register Garmin connector endpoints under /api (/api/garmin/*)
+from api.garmin import garmin_router
+api_router.include_router(garmin_router)
+
 # Include the router
 app.include_router(api_router)
 
@@ -5585,6 +5589,10 @@ async def create_db_indexes():
         await db.training_load.create_index([("user_id", 1), ("date", -1)])
         await db.recovery_scores.create_index([("user_id", 1), ("date", -1)])
         await db.workout_recommendations.create_index([("user_id", 1), ("date", -1)])
+        # Garmin connector collections
+        await db.garmin_connections.create_index("user_id", unique=True, sparse=True)
+        await db.garmin_activities.create_index([("user_id", 1), ("external_id", 1)], unique=True, sparse=True)
+        await db.garmin_activities.create_index([("user_id", 1), ("start_time", -1)])
         logger.info("MongoDB indexes created")
     except Exception as e:
         logger.warning(f"Could not create some MongoDB indexes: {e}")

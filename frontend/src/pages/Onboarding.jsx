@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { Loader2, Check, ShieldAlert, Activity } from "lucide-react";
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
@@ -62,6 +62,33 @@ export default function Onboarding() {
   const [physioData, setPhysioData] = useState(null);
   const [loadingPhysio, setLoadingPhysio] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Garmin connection (invisible, OAuth-like — no password ever collected)
+  const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
+  const [garminCount, setGarminCount] = useState(0);
+
+  const connectGarmin = async () => {
+    setGarminStatus("connecting");
+    try {
+      const res = await axios.post(`${API}/garmin/connect?user_id=${USER_ID}`, {});
+      if (res.data?.status === "connected") {
+        try {
+          const sync = await axios.post(`${API}/garmin/sync?user_id=${USER_ID}`, {});
+          setGarminCount(sync.data?.synced_count || 0);
+        } catch (syncErr) {
+          // connected but sync failed — still mark connected
+          setGarminCount(0);
+        }
+        setGarminStatus("connected");
+        toast.success("Garmin connected");
+      } else if (res.data?.status === "mfa_required") {
+        setGarminStatus("mfa_required");
+      } else {
+        setGarminStatus("error");
+      }
+    } catch (err) {
+      setGarminStatus("error");
+    }
+  };
 
   useEffect(() => {
     const loadPhysio = async () => {
@@ -201,6 +228,62 @@ export default function Onboarding() {
             <div className="space-y-3">
               <h2 className="text-lg font-semibold">Connect your device</h2>
               <OptionGrid options={DEVICE_OPTIONS} value={device} onSelect={setDevice} testIdPrefix="device-option" />
+
+              {device === "Garmin" && (
+                <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3" data-testid="garmin-connect-panel">
+                  {garminStatus === "connected" ? (
+                    <div className="flex items-center gap-2 text-chart-2" data-testid="garmin-connected">
+                      <Check className="w-4 h-4 flex-shrink-0" />
+                      <span className="font-mono text-xs uppercase tracking-wider">
+                        Garmin connected · {garminCount} activities synced
+                      </span>
+                    </div>
+                  ) : garminStatus === "mfa_required" ? (
+                    <div className="space-y-3" data-testid="garmin-mfa">
+                      <div className="flex items-start gap-2 text-amber-400">
+                        <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        <span className="font-mono text-xs">
+                          Additional verification was requested by Garmin. Please retry the connection.
+                        </span>
+                      </div>
+                      <Button
+                        onClick={connectGarmin}
+                        className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
+                        data-testid="garmin-retry"
+                      >
+                        Retry connection
+                      </Button>
+                    </div>
+                  ) : garminStatus === "error" ? (
+                    <div className="space-y-3" data-testid="garmin-error">
+                      <p className="font-mono text-xs text-destructive">
+                        Garmin connection failed. Please try again.
+                      </p>
+                      <Button
+                        onClick={connectGarmin}
+                        className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
+                        data-testid="garmin-retry"
+                      >
+                        Try again
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      onClick={connectGarmin}
+                      disabled={garminStatus === "connecting"}
+                      className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
+                      data-testid="garmin-connect"
+                    >
+                      {garminStatus === "connecting" ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Activity className="w-4 h-4" />
+                      )}
+                      Connect Garmin
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
