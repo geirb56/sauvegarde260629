@@ -65,12 +65,18 @@ CardioCoach is a full-stack AI-powered sports coaching app for endurance athlete
 - **Phase 1**: Invisible Garmin connection in onboarding device step. Provider pattern (`backend/garmin/`), MockProvider default (`GARMIN_PROVIDER=mock`), isolated GccliRunner, ephemeral encrypted vault. Endpoints `/api/garmin/connect|sync|status|activities|disconnect`. NON-NEGOTIABLE: no Garmin password ever collected in UI (OAuth-like). MFA Mode 2 supported (mfa_required -> reconnect). 8/8 backend + frontend E2E tests passed.
 - **Phase 2**: Sync now also imports daily health metrics (HRV / resting HR / sleep) into `garmin_daily_metrics` and mirrors activities into the main `workouts` collection (data_source='garmin', id 'garmin-{ext}') so they appear automatically in Dashboard (Recent Workouts) and Progress (All Workouts). New endpoint `GET /api/garmin/daily-metrics`. New "Garmin Health · 7 days" card on Progress (HRV/Resting HR/Sleep). Disconnect cleans garmin metrics + garmin workouts only. 10/10 backend tests passed.
 
-### How to activate the REAL gccli provider (Phase 3 — not live-tested here)
-The real path is implemented (`backend/garmin/providers/gccli_provider.py` + `runner.py`) but inactive because the `gccli` binary and a Garmin account are not available in this environment. To activate later:
-1. Install the gccli binary (https://gccli.sh) so it is on PATH (or set `GCCLI_PATH`).
-2. Set backend env (server-side only, NEVER in UI): `GARMIN_PROVIDER=gccli`, `GARMIN_USERNAME`, `GARMIN_PASSWORD`, optional `GARMIN_VAULT_KEY` (base64 32-byte AES key).
-3. Credentials are loaded backend-side, stored transiently in the ephemeral vault, used for one sync, then destroyed. No code change needed elsewhere (Provider abstraction).
-Note: gccli headless login may require MFA/keyring which is interactive; the runner raises GccliUnavailable and the service surfaces an error/reconnect state in that case.
+### Real gccli activation (DONE — replaced mock)
+The Garmin connector now uses the REAL `gccli` binary (v1.9.0) — the MockProvider and ephemeral vault have been REMOVED.
+- Binary installed at `/usr/local/bin/gccli` (linux arm64 from github bpauli/gccli releases).
+- Auth: ONE-TIME headless login (email/password via pseudo-TTY) stores an OAuth token under `GCCLI_HOME=/app/backend/.gccli_home` with `GCCLI_KEYRING_BACKEND=file`; gccli auto-refreshes it, so connect is instant and no password is needed afterwards. The first `connect` call auto-logs-in using backend env creds if the token is missing.
+- Backend env (server-side only, NEVER in UI): `GARMIN_PROVIDER=gccli`, `GARMIN_USERNAME`, `GARMIN_PASSWORD`, `GCCLI_HOME`, `GCCLI_KEYRING_BACKEND=file`, optional `GCCLI_PATH`.
+- Data sources: activities via `gccli activities list -j`; resting HR via `gccli health hr <date>` (the `health rhr` endpoint 404s on this account); sleep via `gccli health sleep <date>`; HRV via `gccli health hrv <date>` (empty for accounts without HRV — stored as null).
+- Verified end-to-end: 30 REAL activities + 7 daily metrics (resting_hr 44-49 bpm, sleep 7-9.8h) synced; mirrored into workouts; 8/8 backend tests passed.
+
+### ⚠️ Production deployment requirement for gccli
+A fresh production container will NOT have the gccli binary or the token. Before/at deploy you must:
+1. Install the `gccli` binary for the TARGET architecture (prod may be amd64, not arm64) and put it on PATH (or set `GCCLI_PATH`).
+2. Provide `GARMIN_USERNAME`/`GARMIN_PASSWORD` env (already in backend/.env). The first `connect` will auto-login and persist the token (no MFA on this account). If the account ever enables MFA, an interactive one-time `--mfa-code` login on the server is required.
 
 ## 2025-04-12
 - **Dashboard layout reordered**: Components now appear in user-requested order: 1) Recommandation du jour (score + RUN HARD/EASY/REST), 2) Métriques du jour (6 widgets), 3) Séance du jour, 4) Séances récentes. Animation delays updated accordingly.
