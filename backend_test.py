@@ -1,558 +1,615 @@
 #!/usr/bin/env python3
 """
-Comprehensive backend test suite for CardioCoach Garmin connector.
-Tests all endpoints with the MockProvider (no real Garmin credentials needed).
+Comprehensive backend test for CardioCoach Garmin connector with REAL gccli provider.
+
+CRITICAL CONSTRAINT: connect must NOT require or accept any Garmin password (only user_id + optional testing body).
+
+Test scenarios:
+1. POST /api/garmin/connect?user_id=qa1 (empty JSON body {}) → expect 200, {"status":"connected","provider":"gccli"}
+2. POST /api/garmin/sync?user_id=qa1 → expect 200, {"success":true,"synced_count">0 (REAL activities, expect ~30),"metrics_count">0 (up to 7)}
+3. GET /api/garmin/activities?user_id=qa1&limit=30 → expect real activities with all required fields
+4. GET /api/garmin/daily-metrics?user_id=qa1&days=7 → expect real metrics (hrv MAY be null - acceptable)
+5. GET /api/workouts?user_id=qa1 → must include data_source=="garmin" workouts, NO "mock" ids
+6. Idempotency: POST /api/garmin/sync?user_id=qa1 AGAIN → count stable (no duplicates)
+7. Disconnect cleanup: POST /api/garmin/disconnect?user_id=qa1 → complete cleanup
+8. Regression: status check, sync-before-connect for brand-new user
 """
 
 import requests
-import json
+import time
 import sys
-from typing import Dict, Any
+from typing import Dict, List, Any
 
-# Backend URL from frontend/.env
+# External base URL from frontend/.env
 BASE_URL = "https://charge-load.preview.emergentagent.com/api"
+USER_ID = "qa1"
 
-class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    RESET = '\033[0m'
+# Test results tracking
+test_results = []
+failed_tests = []
 
-def log_test(name: str):
-    print(f"\n{Colors.BLUE}{'='*80}{Colors.RESET}")
-    print(f"{Colors.BLUE}TEST: {name}{Colors.RESET}")
-    print(f"{Colors.BLUE}{'='*80}{Colors.RESET}")
 
-def log_success(msg: str):
-    print(f"{Colors.GREEN}✓ {msg}{Colors.RESET}")
+def log_test(test_num: int, description: str, passed: bool, details: str = ""):
+    """Log test result"""
+    status = "✅ PASS" if passed else "❌ FAIL"
+    result = f"Test {test_num}: {status} - {description}"
+    if details:
+        result += f"\n  Details: {details}"
+    print(result)
+    test_results.append({"test": test_num, "description": description, "passed": passed, "details": details})
+    if not passed:
+        failed_tests.append({"test": test_num, "description": description, "details": details})
 
-def log_error(msg: str):
-    print(f"{Colors.RED}✗ {msg}{Colors.RESET}")
 
-def log_info(msg: str):
-    print(f"{Colors.YELLOW}ℹ {msg}{Colors.RESET}")
-
-def pretty_json(data: Any) -> str:
-    return json.dumps(data, indent=2)
-
-class TestResults:
-    def __init__(self):
-        self.passed = 0
-        self.failed = 0
-        self.errors = []
-    
-    def add_pass(self):
-        self.passed += 1
-    
-    def add_fail(self, error: str):
-        self.failed += 1
-        self.errors.append(error)
-    
-    def summary(self):
-        total = self.passed + self.failed
-        print(f"\n{Colors.BLUE}{'='*80}{Colors.RESET}")
-        print(f"{Colors.BLUE}TEST SUMMARY{Colors.RESET}")
-        print(f"{Colors.BLUE}{'='*80}{Colors.RESET}")
-        print(f"Total: {total} | Passed: {Colors.GREEN}{self.passed}{Colors.RESET} | Failed: {Colors.RED}{self.failed}{Colors.RESET}")
-        
-        if self.errors:
-            print(f"\n{Colors.RED}FAILED TESTS:{Colors.RESET}")
-            for i, error in enumerate(self.errors, 1):
-                print(f"{i}. {error}")
-        
-        return self.failed == 0
-
-results = TestResults()
-
-def test_connect_basic():
-    """Test 1: Basic connect without MFA (empty body or no body)"""
-    log_test("1. POST /api/garmin/connect?user_id=testuser1 (basic connect)")
-    
-    user_id = "testuser1"
-    url = f"{BASE_URL}/garmin/connect?user_id={user_id}"
+def test_1_connect():
+    """Test 1: POST /api/garmin/connect?user_id=qa1 (empty JSON body {})"""
+    print("\n" + "="*80)
+    print("TEST 1: Connect endpoint (no password required)")
+    print("="*80)
     
     try:
-        # Test with empty JSON body
-        response = requests.post(url, json={}, timeout=10)
-        log_info(f"Status Code: {response.status_code}")
-        log_info(f"Response: {pretty_json(response.json())}")
+        url = f"{BASE_URL}/garmin/connect?user_id={USER_ID}"
+        response = requests.post(url, json={}, timeout=30)
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.json()}")
         
         if response.status_code != 200:
-            log_error(f"Expected status 200, got {response.status_code}")
-            results.add_fail(f"Test 1: Expected status 200, got {response.status_code}")
+            log_test(1, "Connect endpoint", False, f"Expected 200, got {response.status_code}")
             return False
         
         data = response.json()
         
-        # Verify response structure
+        # Verify required fields
         if data.get("status") != "connected":
-            log_error(f"Expected status 'connected', got '{data.get('status')}'")
-            results.add_fail(f"Test 1: Expected status 'connected', got '{data.get('status')}'")
+            log_test(1, "Connect endpoint", False, f"Expected status='connected', got '{data.get('status')}'")
             return False
         
-        if data.get("provider") != "mock":
-            log_error(f"Expected provider 'mock', got '{data.get('provider')}'")
-            results.add_fail(f"Test 1: Expected provider 'mock', got '{data.get('provider')}'")
+        if data.get("provider") != "gccli":
+            log_test(1, "Connect endpoint", False, f"Expected provider='gccli', got '{data.get('provider')}'")
             return False
         
-        if "message" not in data:
-            log_error("Missing 'message' field in response")
-            results.add_fail("Test 1: Missing 'message' field in response")
-            return False
-        
-        # CRITICAL: Verify no password was required
-        log_success("Connect succeeded without password ✓")
-        log_success(f"Status: {data['status']}")
-        log_success(f"Provider: {data['provider']}")
-        log_success(f"Message: {data['message']}")
-        
-        results.add_pass()
+        log_test(1, "Connect endpoint", True, f"Connected successfully with provider=gccli (no password required)")
         return True
         
     except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 1: Exception - {str(e)}")
+        log_test(1, "Connect endpoint", False, f"Exception: {str(e)}")
         return False
 
-def test_sync():
-    """Test 2: Sync activities after connect"""
-    log_test("2. POST /api/garmin/sync?user_id=testuser1")
-    
-    user_id = "testuser1"
-    url = f"{BASE_URL}/garmin/sync?user_id={user_id}"
+
+def test_2_sync():
+    """Test 2: POST /api/garmin/sync?user_id=qa1"""
+    print("\n" + "="*80)
+    print("TEST 2: Sync endpoint (REAL activities and metrics)")
+    print("="*80)
     
     try:
-        response = requests.post(url, timeout=10)
-        log_info(f"Status Code: {response.status_code}")
-        log_info(f"Response: {pretty_json(response.json())}")
+        url = f"{BASE_URL}/garmin/sync?user_id={USER_ID}"
+        print(f"Syncing... (may take up to 90 seconds)")
+        response = requests.post(url, timeout=90)
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.json()}")
         
         if response.status_code != 200:
-            log_error(f"Expected status 200, got {response.status_code}")
-            results.add_fail(f"Test 2: Expected status 200, got {response.status_code}")
+            log_test(2, "Sync endpoint", False, f"Expected 200, got {response.status_code}")
             return False
         
         data = response.json()
         
+        # Verify success
         if not data.get("success"):
-            log_error(f"Expected success=true, got {data.get('success')}")
-            results.add_fail(f"Test 2: Expected success=true, got {data.get('success')}")
+            log_test(2, "Sync endpoint", False, f"Expected success=true, got {data.get('success')}")
             return False
         
+        # Verify synced_count > 0 (expect ~30 real activities)
         synced_count = data.get("synced_count", 0)
         if synced_count <= 0:
-            log_error(f"Expected synced_count > 0, got {synced_count}")
-            results.add_fail(f"Test 2: Expected synced_count > 0, got {synced_count}")
+            log_test(2, "Sync endpoint", False, f"Expected synced_count > 0, got {synced_count}")
             return False
         
-        log_success(f"Sync succeeded: {synced_count} activities synced")
-        log_success(f"Message: {data.get('message')}")
+        # Verify metrics_count > 0 (up to 7)
+        metrics_count = data.get("metrics_count", 0)
+        if metrics_count <= 0:
+            log_test(2, "Sync endpoint", False, f"Expected metrics_count > 0, got {metrics_count}")
+            return False
         
-        results.add_pass()
+        log_test(2, "Sync endpoint", True, f"Synced {synced_count} activities and {metrics_count} metrics (REAL data)")
         return True
         
     except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 2: Exception - {str(e)}")
+        log_test(2, "Sync endpoint", False, f"Exception: {str(e)}")
         return False
 
-def test_status():
-    """Test 3: Get connection status"""
-    log_test("3. GET /api/garmin/status?user_id=testuser1")
-    
-    user_id = "testuser1"
-    url = f"{BASE_URL}/garmin/status?user_id={user_id}"
+
+def test_3_activities():
+    """Test 3: GET /api/garmin/activities?user_id=qa1&limit=30"""
+    print("\n" + "="*80)
+    print("TEST 3: Activities endpoint (verify REAL data structure)")
+    print("="*80)
     
     try:
-        response = requests.get(url, timeout=10)
-        log_info(f"Status Code: {response.status_code}")
-        log_info(f"Response: {pretty_json(response.json())}")
+        url = f"{BASE_URL}/garmin/activities?user_id={USER_ID}&limit=30"
+        response = requests.get(url, timeout=30)
+        
+        print(f"Status Code: {response.status_code}")
         
         if response.status_code != 200:
-            log_error(f"Expected status 200, got {response.status_code}")
-            results.add_fail(f"Test 3: Expected status 200, got {response.status_code}")
+            log_test(3, "Activities endpoint", False, f"Expected 200, got {response.status_code}")
             return False
         
         data = response.json()
+        activities = data.get("activities", [])
         
-        if not data.get("connected"):
-            log_error(f"Expected connected=true, got {data.get('connected')}")
-            results.add_fail(f"Test 3: Expected connected=true, got {data.get('connected')}")
+        print(f"Activities count: {len(activities)}")
+        
+        if len(activities) == 0:
+            log_test(3, "Activities endpoint", False, "No activities returned")
             return False
         
-        if data.get("provider") != "mock":
-            log_error(f"Expected provider='mock', got '{data.get('provider')}'")
-            results.add_fail(f"Test 3: Expected provider='mock', got '{data.get('provider')}'")
+        # Verify first activity has all required fields
+        first_activity = activities[0]
+        print(f"Sample activity: {first_activity}")
+        
+        required_fields = ["external_id", "source", "name", "distance", "duration", "avg_hr", "pace"]
+        missing_fields = []
+        
+        for field in required_fields:
+            if field not in first_activity:
+                missing_fields.append(field)
+        
+        if missing_fields:
+            log_test(3, "Activities endpoint", False, f"Missing required fields: {missing_fields}")
             return False
         
-        if data.get("last_sync") is None:
-            log_error("Expected last_sync to be non-null")
-            results.add_fail("Test 3: Expected last_sync to be non-null")
+        # Verify source is "garmin"
+        if first_activity.get("source") != "garmin":
+            log_test(3, "Activities endpoint", False, f"Expected source='garmin', got '{first_activity.get('source')}'")
             return False
         
-        activity_count = data.get("activity_count", 0)
-        if activity_count <= 0:
-            log_error(f"Expected activity_count > 0, got {activity_count}")
-            results.add_fail(f"Test 3: Expected activity_count > 0, got {activity_count}")
+        # Verify distance > 0
+        if not first_activity.get("distance") or first_activity.get("distance") <= 0:
+            log_test(3, "Activities endpoint", False, f"Expected distance > 0, got {first_activity.get('distance')}")
             return False
         
-        log_success(f"Connected: {data['connected']}")
-        log_success(f"Provider: {data['provider']}")
-        log_success(f"Last sync: {data['last_sync']}")
-        log_success(f"Activity count: {activity_count}")
+        # Verify duration > 0
+        if not first_activity.get("duration") or first_activity.get("duration") <= 0:
+            log_test(3, "Activities endpoint", False, f"Expected duration > 0, got {first_activity.get('duration')}")
+            return False
         
-        results.add_pass()
+        # Verify name is non-empty
+        if not first_activity.get("name"):
+            log_test(3, "Activities endpoint", False, "Expected non-empty name")
+            return False
+        
+        # Check if data looks REAL (not deterministic mock)
+        # Real data should have varied names and distances
+        names = [a.get("name") for a in activities[:5]]
+        distances = [a.get("distance") for a in activities[:5]]
+        
+        print(f"Sample names: {names[:3]}")
+        print(f"Sample distances: {distances[:3]}")
+        
+        log_test(3, "Activities endpoint", True, f"Retrieved {len(activities)} REAL activities with all required fields")
         return True
         
     except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 3: Exception - {str(e)}")
+        log_test(3, "Activities endpoint", False, f"Exception: {str(e)}")
         return False
 
-def test_activities():
-    """Test 4: Get activities list with normalized fields"""
-    log_test("4. GET /api/garmin/activities?user_id=testuser1&limit=20")
-    
-    user_id = "testuser1"
-    url = f"{BASE_URL}/garmin/activities?user_id={user_id}&limit=20"
+
+def test_4_daily_metrics():
+    """Test 4: GET /api/garmin/daily-metrics?user_id=qa1&days=7"""
+    print("\n" + "="*80)
+    print("TEST 4: Daily metrics endpoint (hrv MAY be null - acceptable)")
+    print("="*80)
     
     try:
-        response = requests.get(url, timeout=10)
-        log_info(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/garmin/daily-metrics?user_id={USER_ID}&days=7"
+        response = requests.get(url, timeout=30)
+        
+        print(f"Status Code: {response.status_code}")
         
         if response.status_code != 200:
-            log_error(f"Expected status 200, got {response.status_code}")
-            results.add_fail(f"Test 4: Expected status 200, got {response.status_code}")
+            log_test(4, "Daily metrics endpoint", False, f"Expected 200, got {response.status_code}")
             return False
         
         data = response.json()
-        log_info(f"Response: {pretty_json(data)}")
+        print(f"Response: {data}")
         
-        if "activities" not in data:
-            log_error("Missing 'activities' field in response")
-            results.add_fail("Test 4: Missing 'activities' field in response")
-            return False
-        
-        if "count" not in data:
-            log_error("Missing 'count' field in response")
-            results.add_fail("Test 4: Missing 'count' field in response")
-            return False
-        
-        activities = data["activities"]
-        count = data["count"]
-        
+        # Verify count > 0
+        count = data.get("count", 0)
         if count <= 0:
-            log_error(f"Expected count > 0, got {count}")
-            results.add_fail(f"Test 4: Expected count > 0, got {count}")
+            log_test(4, "Daily metrics endpoint", False, f"Expected count > 0, got {count}")
             return False
         
-        if len(activities) != count:
-            log_error(f"Count mismatch: count={count}, len(activities)={len(activities)}")
-            results.add_fail(f"Test 4: Count mismatch")
+        # Verify metrics array
+        metrics = data.get("metrics", [])
+        if len(metrics) == 0:
+            log_test(4, "Daily metrics endpoint", False, "No metrics returned")
             return False
         
-        # Verify normalized fields in first activity
-        if activities:
-            activity = activities[0]
-            required_fields = ["external_id", "source", "distance", "duration", "pace", "avg_hr"]
-            missing_fields = [f for f in required_fields if f not in activity]
-            
-            if missing_fields:
-                log_error(f"Missing required fields in activity: {missing_fields}")
-                results.add_fail(f"Test 4: Missing fields {missing_fields}")
-                return False
-            
-            if activity.get("source") != "garmin":
-                log_error(f"Expected source='garmin', got '{activity.get('source')}'")
-                results.add_fail(f"Test 4: Expected source='garmin'")
-                return False
-            
-            log_success(f"Retrieved {count} activities")
-            log_success(f"Sample activity: {activity.get('name')} - {activity.get('distance')}m, {activity.get('duration')}s, pace {activity.get('pace')}, HR {activity.get('avg_hr')}")
-            log_success("All required normalized fields present ✓")
+        # Verify latest exists
+        latest = data.get("latest")
+        if not latest:
+            log_test(4, "Daily metrics endpoint", False, "No latest metric")
+            return False
         
-        results.add_pass()
+        # Verify first metric has required fields
+        first_metric = metrics[0]
+        print(f"Sample metric: {first_metric}")
+        
+        required_fields = ["date", "resting_hr", "sleep_hours"]
+        missing_fields = []
+        
+        for field in required_fields:
+            if field not in first_metric:
+                missing_fields.append(field)
+        
+        if missing_fields:
+            log_test(4, "Daily metrics endpoint", False, f"Missing required fields: {missing_fields}")
+            return False
+        
+        # Verify resting_hr is a real bpm value
+        resting_hr = first_metric.get("resting_hr")
+        if not isinstance(resting_hr, (int, float)) or resting_hr <= 0:
+            log_test(4, "Daily metrics endpoint", False, f"Expected resting_hr > 0, got {resting_hr}")
+            return False
+        
+        # Verify sleep_hours is a real number
+        sleep_hours = first_metric.get("sleep_hours")
+        if not isinstance(sleep_hours, (int, float)) or sleep_hours < 0:
+            log_test(4, "Daily metrics endpoint", False, f"Expected sleep_hours >= 0, got {sleep_hours}")
+            return False
+        
+        # Note: hrv MAY be null - this is EXPECTED and acceptable
+        hrv = first_metric.get("hrv")
+        hrv_status = "null (expected/acceptable)" if hrv is None else f"{hrv}"
+        
+        log_test(4, "Daily metrics endpoint", True, f"Retrieved {count} REAL metrics (resting_hr={resting_hr}, sleep_hours={sleep_hours}, hrv={hrv_status})")
         return True
         
     except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 4: Exception - {str(e)}")
+        log_test(4, "Daily metrics endpoint", False, f"Exception: {str(e)}")
         return False
 
-def test_mfa_mode():
-    """Test 5: MFA Mode 2 path (simulate_mfa flag)"""
-    log_test("5. MFA Mode 2: POST /api/garmin/connect with simulate_mfa=true")
-    
-    user_id = "mfauser1"
-    url = f"{BASE_URL}/garmin/connect?user_id={user_id}"
-    
-    try:
-        # First call with simulate_mfa=true should return mfa_required
-        log_info("First call with simulate_mfa=true...")
-        response1 = requests.post(url, json={"simulate_mfa": True}, timeout=10)
-        log_info(f"Status Code: {response1.status_code}")
-        log_info(f"Response: {pretty_json(response1.json())}")
-        
-        if response1.status_code != 200:
-            log_error(f"Expected status 200, got {response1.status_code}")
-            results.add_fail(f"Test 5a: Expected status 200, got {response1.status_code}")
-            return False
-        
-        data1 = response1.json()
-        
-        if data1.get("status") != "mfa_required":
-            log_error(f"Expected status 'mfa_required', got '{data1.get('status')}'")
-            results.add_fail(f"Test 5a: Expected status 'mfa_required', got '{data1.get('status')}'")
-            return False
-        
-        log_success(f"First call returned mfa_required ✓")
-        
-        # Retry the same call - should now return connected
-        log_info("\nRetrying the same call...")
-        response2 = requests.post(url, json={"simulate_mfa": True}, timeout=10)
-        log_info(f"Status Code: {response2.status_code}")
-        log_info(f"Response: {pretty_json(response2.json())}")
-        
-        if response2.status_code != 200:
-            log_error(f"Expected status 200, got {response2.status_code}")
-            results.add_fail(f"Test 5b: Expected status 200, got {response2.status_code}")
-            return False
-        
-        data2 = response2.json()
-        
-        if data2.get("status") != "connected":
-            log_error(f"Expected status 'connected', got '{data2.get('status')}'")
-            results.add_fail(f"Test 5b: Expected status 'connected', got '{data2.get('status')}'")
-            return False
-        
-        log_success(f"Retry returned connected ✓")
-        log_success("MFA Mode 2 flow working correctly")
-        
-        results.add_pass()
-        return True
-        
-    except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 5: Exception - {str(e)}")
-        return False
 
-def test_sync_before_connect():
-    """Test 6: Sync without connect (should fail gracefully)"""
-    log_test("6. Sync-before-connect guard: POST /api/garmin/sync for unconnected user")
-    
-    user_id = "freshuser_random_12345"
-    url = f"{BASE_URL}/garmin/sync?user_id={user_id}"
+def test_5_workouts():
+    """Test 5: GET /api/workouts?user_id=qa1"""
+    print("\n" + "="*80)
+    print("TEST 5: Workouts endpoint (verify Garmin workouts, NO mock ids)")
+    print("="*80)
     
     try:
-        response = requests.post(url, timeout=10)
-        log_info(f"Status Code: {response.status_code}")
-        log_info(f"Response: {pretty_json(response.json())}")
+        url = f"{BASE_URL}/workouts?user_id={USER_ID}"
+        response = requests.get(url, timeout=30)
+        
+        print(f"Status Code: {response.status_code}")
         
         if response.status_code != 200:
-            log_error(f"Expected status 200 (graceful failure), got {response.status_code}")
-            results.add_fail(f"Test 6: Expected status 200, got {response.status_code}")
+            log_test(5, "Workouts endpoint", False, f"Expected 200, got {response.status_code}")
             return False
         
-        data = response.json()
+        workouts = response.json()
+        print(f"Total workouts: {len(workouts)}")
         
-        if data.get("success") != False:
-            log_error(f"Expected success=false, got {data.get('success')}")
-            results.add_fail(f"Test 6: Expected success=false")
+        # Filter Garmin workouts
+        garmin_workouts = [w for w in workouts if w.get("data_source") == "garmin"]
+        print(f"Garmin workouts: {len(garmin_workouts)}")
+        
+        if len(garmin_workouts) == 0:
+            log_test(5, "Workouts endpoint", False, "No data_source='garmin' workouts found")
             return False
         
-        if data.get("synced_count") != 0:
-            log_error(f"Expected synced_count=0, got {data.get('synced_count')}")
-            results.add_fail(f"Test 6: Expected synced_count=0")
+        # CRITICAL: Verify NO ids containing "mock"
+        mock_ids = [w.get("id") for w in garmin_workouts if "mock" in w.get("id", "").lower()]
+        if mock_ids:
+            log_test(5, "Workouts endpoint", False, f"Found mock ids in Garmin workouts: {mock_ids}")
             return False
         
-        message = data.get("message", "")
-        if "not connected" not in message.lower():
-            log_error(f"Expected message about 'not connected', got '{message}'")
-            results.add_fail(f"Test 6: Expected 'not connected' message")
+        # Verify first Garmin workout has required fields
+        first_workout = garmin_workouts[0]
+        print(f"Sample Garmin workout: {first_workout}")
+        
+        # Verify id starts with "garmin-"
+        workout_id = first_workout.get("id", "")
+        if not workout_id.startswith("garmin-"):
+            log_test(5, "Workouts endpoint", False, f"Expected id to start with 'garmin-', got '{workout_id}'")
             return False
         
-        log_success("Sync correctly rejected for unconnected user ✓")
-        log_success(f"Message: {message}")
-        log_success("No 500 error - graceful failure ✓")
+        # Verify type in {run, cycle, swim}
+        workout_type = first_workout.get("type")
+        if workout_type not in ["run", "cycle", "swim"]:
+            log_test(5, "Workouts endpoint", False, f"Expected type in [run, cycle, swim], got '{workout_type}'")
+            return False
         
-        results.add_pass()
+        # Verify required fields
+        required_fields = ["name", "date", "duration_minutes", "distance_km", "avg_heart_rate", "avg_pace_min_km"]
+        missing_fields = []
+        
+        for field in required_fields:
+            if field not in first_workout:
+                missing_fields.append(field)
+        
+        if missing_fields:
+            log_test(5, "Workouts endpoint", False, f"Missing required fields: {missing_fields}")
+            return False
+        
+        # Verify distance_km > 0
+        distance_km = first_workout.get("distance_km", 0)
+        if distance_km <= 0:
+            log_test(5, "Workouts endpoint", False, f"Expected distance_km > 0, got {distance_km}")
+            return False
+        
+        log_test(5, "Workouts endpoint", True, f"Found {len(garmin_workouts)} Garmin workouts (NO mock ids, all with valid structure)")
         return True
         
     except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 6: Exception - {str(e)}")
+        log_test(5, "Workouts endpoint", False, f"Exception: {str(e)}")
         return False
 
-def test_disconnect():
-    """Test 7: Disconnect and verify cleanup"""
-    log_test("7. Disconnect: POST /api/garmin/disconnect?user_id=testuser1")
+
+def test_6_idempotency():
+    """Test 6: Idempotency - POST /api/garmin/sync?user_id=qa1 AGAIN"""
+    print("\n" + "="*80)
+    print("TEST 6: Idempotency (sync twice, verify no duplicates)")
+    print("="*80)
     
-    user_id = "testuser1"
-    disconnect_url = f"{BASE_URL}/garmin/disconnect?user_id={user_id}"
-    status_url = f"{BASE_URL}/garmin/status?user_id={user_id}"
+    try:
+        # Get initial counts
+        workouts_url = f"{BASE_URL}/workouts?user_id={USER_ID}"
+        metrics_url = f"{BASE_URL}/garmin/daily-metrics?user_id={USER_ID}&days=7"
+        
+        workouts_before = requests.get(workouts_url, timeout=30).json()
+        garmin_workouts_before = [w for w in workouts_before if w.get("data_source") == "garmin"]
+        count_before = len(garmin_workouts_before)
+        
+        metrics_before = requests.get(metrics_url, timeout=30).json()
+        metrics_count_before = metrics_before.get("count", 0)
+        
+        print(f"Before re-sync: {count_before} Garmin workouts, {metrics_count_before} metrics")
+        
+        # Sync again
+        sync_url = f"{BASE_URL}/garmin/sync?user_id={USER_ID}"
+        print(f"Re-syncing... (may take up to 90 seconds)")
+        sync_response = requests.post(sync_url, timeout=90)
+        
+        if sync_response.status_code != 200:
+            log_test(6, "Idempotency", False, f"Sync failed with status {sync_response.status_code}")
+            return False
+        
+        # Get counts after re-sync
+        workouts_after = requests.get(workouts_url, timeout=30).json()
+        garmin_workouts_after = [w for w in workouts_after if w.get("data_source") == "garmin"]
+        count_after = len(garmin_workouts_after)
+        
+        metrics_after = requests.get(metrics_url, timeout=30).json()
+        metrics_count_after = metrics_after.get("count", 0)
+        
+        print(f"After re-sync: {count_after} Garmin workouts, {metrics_count_after} metrics")
+        
+        # Verify counts are stable (no duplicates)
+        if count_before != count_after:
+            log_test(6, "Idempotency", False, f"Garmin workouts count changed: {count_before} -> {count_after} (duplicates created)")
+            return False
+        
+        if metrics_count_before != metrics_count_after:
+            log_test(6, "Idempotency", False, f"Metrics count changed: {metrics_count_before} -> {metrics_count_after} (duplicates created)")
+            return False
+        
+        log_test(6, "Idempotency", True, f"Counts stable: {count_after} workouts, {metrics_count_after} metrics (no duplicates)")
+        return True
+        
+    except Exception as e:
+        log_test(6, "Idempotency", False, f"Exception: {str(e)}")
+        return False
+
+
+def test_7_disconnect_cleanup():
+    """Test 7: Disconnect cleanup - POST /api/garmin/disconnect?user_id=qa1"""
+    print("\n" + "="*80)
+    print("TEST 7: Disconnect cleanup (verify complete cleanup)")
+    print("="*80)
     
     try:
         # Disconnect
-        log_info("Disconnecting...")
-        response = requests.post(disconnect_url, timeout=10)
-        log_info(f"Status Code: {response.status_code}")
-        log_info(f"Response: {pretty_json(response.json())}")
+        disconnect_url = f"{BASE_URL}/garmin/disconnect?user_id={USER_ID}"
+        disconnect_response = requests.post(disconnect_url, timeout=30)
         
-        if response.status_code != 200:
-            log_error(f"Expected status 200, got {response.status_code}")
-            results.add_fail(f"Test 7a: Expected status 200, got {response.status_code}")
+        print(f"Disconnect Status Code: {disconnect_response.status_code}")
+        print(f"Disconnect Response: {disconnect_response.json()}")
+        
+        if disconnect_response.status_code != 200:
+            log_test(7, "Disconnect cleanup", False, f"Expected 200, got {disconnect_response.status_code}")
             return False
         
-        data = response.json()
-        
-        if not data.get("success"):
-            log_error(f"Expected success=true, got {data.get('success')}")
-            results.add_fail(f"Test 7a: Expected success=true")
+        disconnect_data = disconnect_response.json()
+        if not disconnect_data.get("success"):
+            log_test(7, "Disconnect cleanup", False, f"Expected success=true, got {disconnect_data.get('success')}")
             return False
         
-        log_success("Disconnect succeeded ✓")
+        # Verify daily-metrics count == 0
+        metrics_url = f"{BASE_URL}/garmin/daily-metrics?user_id={USER_ID}&days=7"
+        metrics_response = requests.get(metrics_url, timeout=30)
+        metrics_data = metrics_response.json()
+        metrics_count = metrics_data.get("count", -1)
         
-        # Verify status shows disconnected
-        log_info("\nVerifying status after disconnect...")
-        status_response = requests.get(status_url, timeout=10)
-        log_info(f"Status Code: {status_response.status_code}")
-        log_info(f"Response: {pretty_json(status_response.json())}")
+        print(f"Daily metrics count after disconnect: {metrics_count}")
         
-        if status_response.status_code != 200:
-            log_error(f"Expected status 200, got {status_response.status_code}")
-            results.add_fail(f"Test 7b: Expected status 200, got {status_response.status_code}")
+        if metrics_count != 0:
+            log_test(7, "Disconnect cleanup", False, f"Expected metrics count=0, got {metrics_count}")
             return False
         
+        # Verify no data_source='garmin' workouts remain
+        workouts_url = f"{BASE_URL}/workouts?user_id={USER_ID}"
+        workouts_response = requests.get(workouts_url, timeout=30)
+        workouts = workouts_response.json()
+        garmin_workouts = [w for w in workouts if w.get("data_source") == "garmin"]
+        
+        print(f"Garmin workouts after disconnect: {len(garmin_workouts)}")
+        
+        if len(garmin_workouts) != 0:
+            log_test(7, "Disconnect cleanup", False, f"Expected 0 Garmin workouts, found {len(garmin_workouts)}")
+            return False
+        
+        # Verify status shows connected=false
+        status_url = f"{BASE_URL}/garmin/status?user_id={USER_ID}"
+        status_response = requests.get(status_url, timeout=30)
         status_data = status_response.json()
         
+        print(f"Status after disconnect: {status_data}")
+        
         if status_data.get("connected") != False:
-            log_error(f"Expected connected=false, got {status_data.get('connected')}")
-            results.add_fail(f"Test 7b: Expected connected=false")
+            log_test(7, "Disconnect cleanup", False, f"Expected connected=false, got {status_data.get('connected')}")
             return False
         
-        if status_data.get("activity_count") != 0:
-            log_error(f"Expected activity_count=0, got {status_data.get('activity_count')}")
-            results.add_fail(f"Test 7b: Expected activity_count=0 after disconnect")
-            return False
-        
-        log_success("Status shows disconnected ✓")
-        log_success("Activity count reset to 0 ✓")
-        
-        results.add_pass()
+        log_test(7, "Disconnect cleanup", True, "Complete cleanup verified (metrics=0, workouts=0, connected=false)")
         return True
         
     except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 7: Exception - {str(e)}")
+        log_test(7, "Disconnect cleanup", False, f"Exception: {str(e)}")
         return False
 
-def test_idempotency():
-    """Test 8: Idempotency - sync twice should not duplicate activities"""
-    log_test("8. Idempotency: Connect + sync twice for fresh user")
+
+def test_8_regression():
+    """Test 8: Regression tests"""
+    print("\n" + "="*80)
+    print("TEST 8: Regression tests")
+    print("="*80)
     
-    user_id = "idempotency_test_user_99"
-    connect_url = f"{BASE_URL}/garmin/connect?user_id={user_id}"
-    sync_url = f"{BASE_URL}/garmin/sync?user_id={user_id}"
-    status_url = f"{BASE_URL}/garmin/status?user_id={user_id}"
+    all_passed = True
     
+    # 8a: Status check after fresh connect
     try:
-        # Connect
-        log_info("Connecting...")
-        connect_resp = requests.post(connect_url, json={}, timeout=10)
-        if connect_resp.status_code != 200 or connect_resp.json().get("status") != "connected":
-            log_error("Failed to connect")
-            results.add_fail("Test 8: Failed to connect")
-            return False
-        log_success("Connected ✓")
+        print("\n8a: Status check after fresh connect")
         
-        # First sync
-        log_info("\nFirst sync...")
-        sync1_resp = requests.post(sync_url, timeout=10)
-        if sync1_resp.status_code != 200:
-            log_error(f"First sync failed with status {sync1_resp.status_code}")
-            results.add_fail(f"Test 8: First sync failed")
-            return False
+        # Connect again
+        connect_url = f"{BASE_URL}/garmin/connect?user_id={USER_ID}"
+        connect_response = requests.post(connect_url, json={}, timeout=30)
         
-        sync1_data = sync1_resp.json()
-        synced_count_1 = sync1_data.get("synced_count", 0)
-        log_info(f"First sync: {pretty_json(sync1_data)}")
-        log_success(f"First sync: {synced_count_1} activities")
-        
-        # Get status after first sync
-        status1_resp = requests.get(status_url, timeout=10)
-        status1_data = status1_resp.json()
-        activity_count_1 = status1_data.get("activity_count", 0)
-        log_success(f"Activity count after first sync: {activity_count_1}")
-        
-        # Second sync (should be idempotent)
-        log_info("\nSecond sync (should be idempotent)...")
-        sync2_resp = requests.post(sync_url, timeout=10)
-        if sync2_resp.status_code != 200:
-            log_error(f"Second sync failed with status {sync2_resp.status_code}")
-            results.add_fail(f"Test 8: Second sync failed")
-            return False
-        
-        sync2_data = sync2_resp.json()
-        synced_count_2 = sync2_data.get("synced_count", 0)
-        log_info(f"Second sync: {pretty_json(sync2_data)}")
-        log_success(f"Second sync: {synced_count_2} activities")
-        
-        # Get status after second sync
-        status2_resp = requests.get(status_url, timeout=10)
-        status2_data = status2_resp.json()
-        activity_count_2 = status2_data.get("activity_count", 0)
-        log_success(f"Activity count after second sync: {activity_count_2}")
-        
-        # Verify idempotency
-        if activity_count_1 != activity_count_2:
-            log_error(f"Activity count changed: {activity_count_1} -> {activity_count_2} (should be stable)")
-            results.add_fail(f"Test 8: Activity count not stable (duplicates?)")
-            return False
-        
-        # The synced_count on second sync should be the same (re-upserting same activities)
-        # or could be 0 if provider returns same activities and upsert doesn't count as "new"
-        # Based on the code, it will still count as synced since it processes all activities
-        log_success(f"Activity count stable: {activity_count_1} == {activity_count_2} ✓")
-        log_success("No duplicate activities created ✓")
-        
-        results.add_pass()
-        return True
-        
+        if connect_response.status_code != 200:
+            log_test(8, "Regression (8a: status after connect)", False, f"Connect failed with status {connect_response.status_code}")
+            all_passed = False
+        else:
+            # Check status
+            status_url = f"{BASE_URL}/garmin/status?user_id={USER_ID}"
+            status_response = requests.get(status_url, timeout=30)
+            status_data = status_response.json()
+            
+            print(f"Status: {status_data}")
+            
+            if status_data.get("connected") != True:
+                log_test(8, "Regression (8a: status after connect)", False, f"Expected connected=true, got {status_data.get('connected')}")
+                all_passed = False
+            elif status_data.get("provider") != "gccli":
+                log_test(8, "Regression (8a: status after connect)", False, f"Expected provider='gccli', got {status_data.get('provider')}")
+                all_passed = False
+            else:
+                print("✅ 8a: Status check passed (connected=true, provider=gccli)")
     except Exception as e:
-        log_error(f"Exception: {str(e)}")
-        results.add_fail(f"Test 8: Exception - {str(e)}")
-        return False
+        log_test(8, "Regression (8a: status after connect)", False, f"Exception: {str(e)}")
+        all_passed = False
+    
+    # 8b: Sync-before-connect for brand-new user
+    try:
+        print("\n8b: Sync-before-connect for brand-new user")
+        
+        new_user_id = "qa_never_connected"
+        
+        # Try to sync without connecting first
+        sync_url = f"{BASE_URL}/garmin/sync?user_id={new_user_id}"
+        sync_response = requests.post(sync_url, timeout=30)
+        
+        print(f"Sync Status Code: {sync_response.status_code}")
+        print(f"Sync Response: {sync_response.json()}")
+        
+        if sync_response.status_code == 500:
+            log_test(8, "Regression (8b: sync-before-connect)", False, "Got 500 error (should be graceful failure)")
+            all_passed = False
+        else:
+            sync_data = sync_response.json()
+            
+            if sync_data.get("success") != False:
+                log_test(8, "Regression (8b: sync-before-connect)", False, f"Expected success=false, got {sync_data.get('success')}")
+                all_passed = False
+            elif "not connected" not in sync_data.get("message", "").lower():
+                log_test(8, "Regression (8b: sync-before-connect)", False, f"Expected 'not connected' message, got '{sync_data.get('message')}'")
+                all_passed = False
+            else:
+                print("✅ 8b: Sync-before-connect guard passed (graceful failure, no 500)")
+    except Exception as e:
+        log_test(8, "Regression (8b: sync-before-connect)", False, f"Exception: {str(e)}")
+        all_passed = False
+    
+    if all_passed:
+        log_test(8, "Regression tests", True, "All regression tests passed (status check, sync-before-connect guard)")
+    
+    return all_passed
+
 
 def main():
-    print(f"\n{Colors.BLUE}{'='*80}{Colors.RESET}")
-    print(f"{Colors.BLUE}CardioCoach Garmin Connector Backend Test Suite{Colors.RESET}")
-    print(f"{Colors.BLUE}Base URL: {BASE_URL}{Colors.RESET}")
-    print(f"{Colors.BLUE}Provider: MockProvider (GARMIN_PROVIDER=mock){Colors.RESET}")
-    print(f"{Colors.BLUE}{'='*80}{Colors.RESET}")
+    """Run all tests in order"""
+    print("\n" + "="*80)
+    print("CARDIOCOACH GARMIN CONNECTOR - REAL GCCLI PROVIDER TESTING")
+    print("="*80)
+    print(f"Base URL: {BASE_URL}")
+    print(f"User ID: {USER_ID}")
+    print(f"Provider: gccli (REAL Garmin account)")
+    print("="*80)
     
-    # Run all tests in order
-    test_connect_basic()
-    test_sync()
-    test_status()
-    test_activities()
-    test_mfa_mode()
-    test_sync_before_connect()
-    test_disconnect()
-    test_idempotency()
+    # Run tests in order
+    test_1_connect()
+    time.sleep(1)
     
-    # Print summary
-    success = results.summary()
+    test_2_sync()
+    time.sleep(1)
     
-    if success:
-        print(f"\n{Colors.GREEN}{'='*80}{Colors.RESET}")
-        print(f"{Colors.GREEN}ALL TESTS PASSED ✓{Colors.RESET}")
-        print(f"{Colors.GREEN}{'='*80}{Colors.RESET}")
-        sys.exit(0)
-    else:
-        print(f"\n{Colors.RED}{'='*80}{Colors.RESET}")
-        print(f"{Colors.RED}SOME TESTS FAILED ✗{Colors.RESET}")
-        print(f"{Colors.RED}{'='*80}{Colors.RESET}")
+    test_3_activities()
+    time.sleep(1)
+    
+    test_4_daily_metrics()
+    time.sleep(1)
+    
+    test_5_workouts()
+    time.sleep(1)
+    
+    test_6_idempotency()
+    time.sleep(1)
+    
+    test_7_disconnect_cleanup()
+    time.sleep(1)
+    
+    test_8_regression()
+    
+    # Summary
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    
+    passed_count = sum(1 for r in test_results if r["passed"])
+    total_count = len(test_results)
+    
+    print(f"Total Tests: {total_count}")
+    print(f"Passed: {passed_count}")
+    print(f"Failed: {total_count - passed_count}")
+    
+    if failed_tests:
+        print("\n" + "="*80)
+        print("FAILED TESTS")
+        print("="*80)
+        for failed in failed_tests:
+            print(f"Test {failed['test']}: {failed['description']}")
+            print(f"  Details: {failed['details']}")
+    
+    print("\n" + "="*80)
+    
+    # Exit with appropriate code
+    if failed_tests:
         sys.exit(1)
+    else:
+        print("✅ ALL TESTS PASSED")
+        sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

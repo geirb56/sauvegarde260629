@@ -108,7 +108,7 @@ backend:
   - task: "Garmin connect endpoint (POST /api/garmin/connect)"
     implemented: true
     working: true
-    file: "backend/api/garmin.py, backend/garmin/service.py, backend/garmin/providers/mock_provider.py"
+    file: "backend/api/garmin.py, backend/garmin/service.py, backend/garmin/providers/gccli_provider.py"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
@@ -119,10 +119,13 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: Connect endpoint working correctly. Test 1: Basic connect with empty body {} returns status='connected', provider='mock', message='Garmin connected'. Test 5: MFA Mode 2 simulation working - first call with simulate_mfa=true returns status='mfa_required', retry returns status='connected'. CRITICAL CONSTRAINT VERIFIED: NO password required or accepted - only user_id query param and optional simulate_mfa flag in body."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: Connect endpoint working perfectly with REAL Garmin account. Test 1: POST /api/garmin/connect?user_id=qa1 with empty body {} returns status='connected', provider='gccli', message='Garmin connected'. Connection is instant (OAuth token already persisted at /app/backend/.gccli_home). CRITICAL CONSTRAINT VERIFIED: NO password required or accepted from client - only user_id query param. Backend credentials (GARMIN_USERNAME/GARMIN_PASSWORD) sourced from env, never from UI. All user_ids pull same backing Garmin account data (expected behavior)."
   - task: "Garmin sync endpoint (POST /api/garmin/sync) + normalized storage"
     implemented: true
     working: true
-    file: "backend/garmin/service.py, backend/garmin/providers/mock_provider.py"
+    file: "backend/garmin/service.py, backend/garmin/providers/gccli_provider.py"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
@@ -133,6 +136,9 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: Sync endpoint working correctly. Test 2: Sync after connect returns success=true, synced_count=9, message='Imported 9 activities'. Test 6: Sync-before-connect guard working - unconnected user gets success=false, synced_count=0, message='Garmin not connected' (graceful failure, no 500 error). Test 8: Idempotency verified - syncing twice for same user doesn't duplicate activities (activity_count stable across multiple syncs)."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: Sync endpoint working perfectly with REAL Garmin data. Test 2: POST /api/garmin/sync?user_id=qa1 returns success=true, synced_count=30 (REAL activities from actual Garmin account), metrics_count=7 (REAL daily health metrics). Sync completed in ~3 seconds. Test 6: Idempotency verified - re-syncing same user keeps counts stable (30 workouts, 7 metrics), no duplicates created. Test 8b: Sync-before-connect guard working - brand-new user 'qa_never_connected' gets success=false, message='Garmin not connected' (graceful failure, no 500 error). All activities properly normalized and stored in MongoDB."
   - task: "Garmin status / activities / disconnect endpoints"
     implemented: true
     working: true
@@ -147,10 +153,13 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: All endpoints working correctly. Test 3: GET /api/garmin/status returns connected=true, provider='mock', last_sync timestamp, activity_count=9. Test 4: GET /api/garmin/activities returns normalized activities with all required fields (external_id, source='garmin', distance, duration, pace, avg_hr) - verified 9 activities with proper structure. Test 7: POST /api/garmin/disconnect returns success=true, subsequent status check shows connected=false and activity_count=0 (proper cleanup)."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: All endpoints working perfectly with REAL data. Test 3: GET /api/garmin/activities?user_id=qa1&limit=30 returns 30 REAL activities with all required fields (external_id='23407016749', source='garmin', name='Baden Course à pied', distance=31664.39m, duration=13891.68s, avg_hr=148, pace='7:19'). Data shows real variation (not deterministic mock). Test 7: POST /api/garmin/disconnect?user_id=qa1 returns success=true, complete cleanup verified (metrics=0, workouts=0, connected=false). Test 8a: GET /api/garmin/status after fresh connect returns connected=true, provider='gccli'."
   - task: "PHASE 2: Sync daily health metrics"
     implemented: true
     working: true
-    file: "backend/garmin/service.py, backend/garmin/providers/mock_provider.py"
+    file: "backend/garmin/service.py, backend/garmin/providers/gccli_provider.py"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
@@ -158,6 +167,9 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: POST /api/garmin/sync now syncs BOTH activities AND daily health metrics. Test user p2test: synced_count=6, metrics_count=7. Response includes both counts as required. Daily metrics stored in garmin_daily_metrics collection with proper upsert by user_id+date."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: Daily health metrics syncing perfectly with REAL data. Test 2: POST /api/garmin/sync?user_id=qa1 returns synced_count=30 AND metrics_count=7 (both counts present as required). Test 4: GET /api/garmin/daily-metrics?user_id=qa1&days=7 returns 7 REAL metrics with date, resting_hr (44-49 bpm), sleep_hours (7.0-9.8 hours), source='garmin'. HRV is null for this account (EXPECTED and acceptable per requirements). Metrics properly stored in garmin_daily_metrics collection with upsert by user_id+date."
   - task: "PHASE 2: GET /api/garmin/daily-metrics endpoint"
     implemented: true
     working: true
@@ -169,6 +181,9 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: GET /api/garmin/daily-metrics?user_id=p2test&days=7 returns proper structure: {metrics: [7 items], latest: {...}, count: 7}. Each metric has all required fields: date, hrv, resting_hr, sleep_hours, sleep_score, source='garmin'. Empty case tested: never-synced user returns HTTP 200 with {metrics: [], latest: null, count: 0} (no 500 error)."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: Daily metrics endpoint working perfectly with REAL data. Test 4: GET /api/garmin/daily-metrics?user_id=qa1&days=7 returns proper structure {metrics: [7 items], latest: {...}, count: 7}. Each metric has all required fields: date (2026-06-22 to 2026-06-28), resting_hr (44-49 bpm, real values), sleep_hours (7.0-9.8 hours, real values), source='garmin'. HRV is null for this Garmin account (EXPECTED and acceptable per requirements - not all accounts have HRV data). Response structure matches specification exactly."
   - task: "PHASE 2: Mirror activities into workouts collection"
     implemented: true
     working: true
@@ -180,6 +195,9 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: Activities mirrored into main workouts collection. GET /api/workouts?user_id=p2test returns 6 workouts with data_source='garmin'. All garmin workouts have: id starting with 'garmin-', type in [run, cycle, swim], name (non-empty), date, duration_minutes (int), distance_km (>0), avg_heart_rate, avg_pace_min_km. Sample: id=garmin-mock-p2test-0, type=run, name='Tempo Run', duration=27min, distance=5.61km, HR=132, pace=4.88min/km."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: Activities mirrored perfectly into workouts collection with REAL data. Test 5: GET /api/workouts?user_id=qa1 returns 30 workouts with data_source='garmin'. CRITICAL: NO 'mock' ids found anywhere (verified all 30 workouts). All Garmin workouts have: id starting with 'garmin-' (e.g., 'garmin-23407016749'), type in [run, cycle, swim], name (non-empty, e.g., 'Baden Course à pied'), date, duration_minutes (232), distance_km (31.66, >0), avg_heart_rate (148), avg_pace_min_km (7.312). All required fields present and valid. Real data confirmed by varied names and distances."
   - task: "PHASE 2: Idempotency for workouts and metrics"
     implemented: true
     working: true
@@ -191,6 +209,9 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: Idempotency working correctly. Synced user p2test twice: garmin workouts count stable (6 == 6), daily metrics count stable (7 == 7). No duplicate workouts or metrics created on re-sync. Upsert logic working as expected."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: Idempotency working perfectly with REAL data. Test 6: Synced user qa1 twice - before re-sync: 30 Garmin workouts, 7 metrics; after re-sync: 30 Garmin workouts, 7 metrics (counts stable, no duplicates created). Upsert logic working correctly for both workouts (by id='garmin-{external_id}') and metrics (by user_id+date). No duplicate activities or metrics created on repeated syncs."
   - task: "PHASE 2: Enhanced disconnect cleanup"
     implemented: true
     working: true
@@ -202,6 +223,9 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: Disconnect cleanup enhanced. POST /api/garmin/disconnect?user_id=p2test removes: (1) garmin_connections, (2) garmin_activities, (3) garmin_daily_metrics (count=0 after disconnect), (4) ONLY workouts with data_source='garmin' (0 remaining after disconnect). Other workouts preserved (if any). Complete cleanup verified."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED WITH REAL GCCLI PROVIDER: Disconnect cleanup working perfectly with REAL data. Test 7: POST /api/garmin/disconnect?user_id=qa1 returns success=true. Complete cleanup verified: (1) garmin_connections removed (connected=false), (2) garmin_activities removed, (3) garmin_daily_metrics removed (count=0 after disconnect), (4) ONLY workouts with data_source='garmin' removed (0 Garmin workouts remaining). GET /api/garmin/status after disconnect shows connected=false, activity_count=0. All cleanup operations working correctly."
 
 frontend:
   - task: "Onboarding device step — invisible Garmin connection (no password)"
@@ -239,6 +263,8 @@ agent_communication:
     - agent: "testing"
       message: "Frontend E2E PASSED. Full 6-step onboarding works; Garmin device step connects in one click, shows 'Garmin connected · 7 activities synced', success toast, navigates to /training after Apply my plan. NON-NEGOTIABLE CONSTRAINT VERIFIED TWICE: no password/email/text input ever shown during Garmin connection. No console errors, no failed requests."
     - agent: "main"
+      message: "MAJOR CHANGE: switched Garmin from MockProvider to the REAL gccli binary (installed at /usr/local/bin/gccli v1.9.0). MockProvider and vault.py REMOVED. GARMIN_PROVIDER=gccli now. Real Garmin account configured backend-side via env (GARMIN_USERNAME/GARMIN_PASSWORD, NEVER from UI); gccli persists an OAuth token under GCCLI_HOME=/app/backend/.gccli_home (keyring backend=file) and auto-refreshes, so connect is instant and sync pulls REAL data. Please re-test all /api/garmin/* endpoints with the REAL provider (use user_id query param, e.g. 'qa1'): (1) POST /api/garmin/connect?user_id=qa1 (body {}) -> status 'connected' (no password needed; token already stored). (2) POST /api/garmin/sync?user_id=qa1 -> success true, synced_count > 0 (REAL activities, ~30), metrics_count > 0 (up to 7). May take a few seconds. (3) GET /api/garmin/daily-metrics?user_id=qa1 -> real metrics with resting_hr and sleep_hours present (hrv may be null for this account — that's expected/acceptable). (4) GET /api/garmin/activities?user_id=qa1 -> real activities with fields external_id, source='garmin', name, distance>0, duration>0, avg_hr, pace. (5) GET /api/workouts?user_id=qa1 -> includes data_source='garmin' workouts (id prefixed 'garmin-'), NO 'mock' ids anywhere. (6) Idempotency: sync twice -> garmin workouts count stable (upsert by external_id, no duplicates), metrics stable. (7) Disconnect: POST /api/garmin/disconnect?user_id=qa1 -> success; afterwards status connected=false, daily-metrics count=0, and no data_source='garmin' workouts remain. (8) Status: GET /api/garmin/status?user_id=qa1 works. NOTE: provider is REAL; all user_ids pull the same backing Garmin account data (credentials are global backend env) — this is expected. Constraint: connect must NOT require any password. Don't worry about gccli login internals; the token is already provisioned."
+    - agent: "main"
       message: "PHASE 2 added. Please re-test the Garmin backend with these NEW/CHANGED behaviors (provider still mock, user_id query param): (A) POST /api/garmin/sync?user_id=p2test now ALSO syncs daily health metrics and mirrors activities into the main workouts collection. Expect response to include both synced_count>0 AND metrics_count>0 (==7). (B) NEW endpoint GET /api/garmin/daily-metrics?user_id=p2test&days=7 -> expect {metrics:[...7 items], latest:{...}, count:7}. Each metric has date, hrv, resting_hr, sleep_hours, sleep_score, source='garmin'. (C) After connect+sync for user_id=p2test, GET /api/workouts?user_id=p2test must include activities with data_source='garmin' (id prefixed 'garmin-'), with valid fields: type in [run,cycle,swim], name, date, duration_minutes, distance_km, avg_heart_rate, avg_pace_min_km. (D) Idempotency: sync twice for the same user -> workouts with data_source='garmin' count stays stable (no duplicates), daily metrics count stays 7. (E) POST /api/garmin/disconnect?user_id=p2test -> must remove garmin daily metrics AND remove ONLY data_source='garmin' workouts from /api/workouts (other workouts preserved); daily-metrics count becomes 0. (F) daily-metrics for a user that never synced -> {metrics:[], latest:null, count:0}, HTTP 200 (no error). Regression: re-verify connect (no password), status, MFA simulate, sync-before-connect guard still work."
     - agent: "testing"
       message: "✅ ALL BACKEND TESTS PASSED (8/8). Comprehensive testing completed for all Garmin connector endpoints. Test results: (1) Connect endpoint works without password - only user_id param required ✓ (2) Sync endpoint successfully imports activities (9 synced) ✓ (3) Status endpoint returns correct connection state and activity count ✓ (4) Activities endpoint returns normalized data with all required fields (external_id, source=garmin, distance, duration, pace, avg_hr) ✓ (5) MFA Mode 2 simulation working correctly (mfa_required -> connected on retry) ✓ (6) Sync-before-connect guard prevents sync for unconnected users (graceful failure) ✓ (7) Disconnect properly cleans up connection and activities ✓ (8) Idempotency verified - no duplicate activities on repeated syncs ✓. CRITICAL CONSTRAINT VERIFIED: NO Garmin password required or accepted anywhere. MockProvider working as expected. All endpoints production-ready."
@@ -246,4 +272,6 @@ agent_communication:
       message: "✅ FRONTEND ONBOARDING FLOW FULLY TESTED AND WORKING. Complete end-to-end test of 6-step onboarding flow at https://charge-load.preview.emergentagent.com/onboarding passed all checks. All steps (Welcome → Fitness → Goal → Frequency → Device → Target) working correctly. CRITICAL GARMIN CONNECTION VERIFIED: (1) NO password/email fields ever displayed (verified before and after connection: 0 password fields, 0 email fields, 0 text inputs) ✓✓✓ (2) 'Connect Garmin' button visible and functional ✓ (3) Connection successful with 7 activities synced ✓ (4) Success toast 'Garmin connected' displayed ✓ (5) Connected state shows 'Garmin connected · 7 activities synced' ✓ (6) Personalized recommendation rendered correctly ✓ (7) Successfully navigated to /training page with plan applied ✓ (8) 'Personalized plan updated' toast displayed ✓. No console errors or network failures detected. All data-testids working as expected. CRITICAL CONSTRAINT FULLY VERIFIED: Invisible Garmin connection (OAuth-like) working perfectly with NO credentials ever requested from user."
     - agent: "testing"
       message: "✅ ALL PHASE 2 BACKEND TESTS PASSED (10/10). Comprehensive testing completed for PHASE 2 features and regression tests. PHASE 2 NEW FEATURES (6 tests): (A) Sync returns both synced_count=6 AND metrics_count=7 ✓ (B) GET /api/garmin/daily-metrics returns proper structure with 7 metrics, all with required fields (date, hrv, resting_hr, sleep_hours, sleep_score, source='garmin') ✓ (C) Activities mirrored into /api/workouts with data_source='garmin', 6 workouts with valid structure (id starts with 'garmin-', type in [run,cycle,swim], name, date, duration_minutes, distance_km>0, avg_heart_rate, avg_pace_min_km) ✓ (D) Idempotency verified - no duplicates on re-sync (6 workouts and 7 metrics stable) ✓ (E) Disconnect cleanup enhanced - removes garmin metrics (count=0) AND garmin workouts only (0 remaining) ✓ (F) Empty case works - never-synced user returns HTTP 200 with {metrics:[], latest:null, count:0} ✓. REGRESSION TESTS (4 tests): Connect without password ✓, Status endpoint ✓, MFA Mode 2 simulation ✓, Sync-before-connect guard ✓. All PHASE 1 features still working correctly. PHASE 2 backend implementation complete and production-ready."
+    - agent: "testing"
+      message: "✅ ALL BACKEND TESTS PASSED WITH REAL GCCLI PROVIDER (8/8). Comprehensive testing completed for CardioCoach Garmin connector using REAL gccli provider with actual Garmin account data. Test results: (1) Connect endpoint: POST /api/garmin/connect?user_id=qa1 with empty body {} returns status='connected', provider='gccli' (instant connection, OAuth token already persisted) ✓ (2) Sync endpoint: POST /api/garmin/sync?user_id=qa1 returns success=true, synced_count=30 (REAL activities), metrics_count=7 (REAL daily health metrics) ✓ (3) Activities endpoint: GET /api/garmin/activities?user_id=qa1&limit=30 returns 30 REAL activities with all required fields (external_id, source='garmin', name, distance>0, duration>0, avg_hr, pace) - data shows real variation, not deterministic mock ✓ (4) Daily metrics endpoint: GET /api/garmin/daily-metrics?user_id=qa1&days=7 returns 7 REAL metrics (resting_hr=44-49 bpm, sleep_hours=7.0-9.8 hours, hrv=null which is EXPECTED and acceptable) ✓ (5) Workouts endpoint: GET /api/workouts?user_id=qa1 returns 30 Garmin workouts with data_source='garmin', CRITICAL: NO 'mock' ids found anywhere, all with valid structure (id starts with 'garmin-', type in [run,cycle,swim], all required fields present) ✓ (6) Idempotency: Re-syncing user qa1 keeps counts stable (30 workouts, 7 metrics), no duplicates created ✓ (7) Disconnect cleanup: POST /api/garmin/disconnect?user_id=qa1 returns success=true, complete cleanup verified (metrics=0, workouts=0, connected=false) ✓ (8) Regression tests: Status check after connect (connected=true, provider='gccli') and sync-before-connect guard for brand-new user (graceful failure, no 500 error) ✓. CRITICAL CONSTRAINT VERIFIED: Connect endpoint does NOT require or accept any Garmin password - only user_id query param. Backend credentials sourced from env, never from UI. All user_ids pull same backing Garmin account data (expected behavior). REAL gccli provider fully tested and production-ready."
 

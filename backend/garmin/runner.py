@@ -1,13 +1,18 @@
-"""GccliRunner — isolated wrapper around the `gccli` binary.
+"""GccliRunner — isolated wrapper around the real `gccli` binary.
 
 This is the ONLY place that knows how to talk to Garmin Connect through the
-gccli command-line tool. It is intentionally isolated so that the rest of the
-application never depends on gccli details.
+gccli command-line tool. It is intentionally isolated so the rest of the app
+never depends on gccli details.
 
-If the gccli binary is not installed, or Garmin requires interactive auth that
-is incompatible with the invisible product flow, methods raise
-`GccliUnavailable`. Callers (the provider/service) are expected to handle this
-gracefully (e.g. surface an 'mfa_required'/reconnect state).
+Auth model:
+- gccli persists an OAuth token (file keyring) under a stable HOME directory.
+- We perform a ONE-TIME headless login (email/password, optional MFA) via a
+  pseudo-TTY; afterwards gccli auto-refreshes the token, so data commands do
+  not need the password again.
+- The Garmin password is sourced ONLY from backend env (never from the UI).
+
+If gccli is missing or login needs interactive MFA we can't satisfy, methods
+raise GccliUnavailable / GccliMfaRequired so callers can react gracefully.
 """
 
 from __future__ import annotations
@@ -15,10 +20,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pty
+import select
 import shutil
 import subprocess
-import tempfile
-from time import sleep
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -29,102 +36,199 @@ class GccliError(Exception):
 
 
 class GccliUnavailable(GccliError):
-    """Raised when the gccli binary is missing or auth is interactive."""
+    """Raised when the gccli binary is missing."""
+
+
+class GccliMfaRequired(GccliError):
+    """Raised when login requires an MFA code we don't have."""
 
 
 class GccliRunner:
-    def __init__(self, gccli_path: str = "gccli", timeout_seconds: int = 30, max_retries: int = 3):
+    def __init__(
+        self,
+        gccli_path: str = "gccli",
+        home: Optional[str] = None,
+        keyring_backend: str = "file",
+        timeout_seconds: int = 60,
+    ):
         self.gccli_path = gccli_path
+        self.home = home or os.environ.get("GCCLI_HOME", "/app/backend/.gccli_home")
+        self.keyring_backend = keyring_backend
         self.timeout = timeout_seconds
-        self.max_retries = max_retries
+        os.makedirs(self.home, exist_ok=True)
 
+    # ------------------------------------------------------------------ utils
     def is_available(self) -> bool:
         return shutil.which(self.gccli_path) is not None
 
     def _ensure_available(self) -> None:
         if not self.is_available():
-            raise GccliUnavailable(
-                f"gccli binary '{self.gccli_path}' not found in PATH"
-            )
+            raise GccliUnavailable(f"gccli binary '{self.gccli_path}' not found in PATH")
 
-    def _run_cmd(self, args: List[str], env=None) -> subprocess.CompletedProcess:
-        last_exc: Optional[Exception] = None
-        for attempt in range(1, self.max_retries + 1):
+    def _env(self, account: Optional[str] = None) -> dict:
+        env = os.environ.copy()
+        env["HOME"] = self.home
+        env["GCCLI_KEYRING_BACKEND"] = self.keyring_backend
+        if account:
+            env["GCCLI_ACCOUNT"] = account
+        return env
+
+    def _run_json(self, args: List[str], account: Optional[str] = None):
+        self._ensure_available()
+        cmd = [self.gccli_path] + args + ["-j"]
+        cp = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=self.timeout,
+            env=self._env(account),
+        )
+        out = cp.stdout.decode("utf-8", errors="replace").strip()
+        err = cp.stderr.decode("utf-8", errors="replace").strip()
+        if cp.returncode != 0:
+            raise GccliError(f"gccli {' '.join(args)} failed: {err or out}")
+        if not out:
+            return {}
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError as exc:
+            raise GccliError(f"gccli {' '.join(args)} returned non-JSON: {out[:200]}") from exc
+
+    # ------------------------------------------------------------------- auth
+    def auth_status(self, account: Optional[str] = None) -> dict:
+        """Return {email, expired, expires_at} or {} if not authenticated."""
+        self._ensure_available()
+        cp = subprocess.run(
+            [self.gccli_path, "auth", "status", "-j"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=self.timeout,
+            env=self._env(account),
+        )
+        out = cp.stdout.decode("utf-8", errors="replace").strip()
+        if cp.returncode != 0 or not out:
+            return {}
+        try:
+            data = json.loads(out)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def is_authenticated(self, account: Optional[str] = None) -> bool:
+        status = self.auth_status(account)
+        # A stored session is usable even if the access token is 'expired'
+        # because gccli auto-refreshes via the refresh token on next call.
+        return bool(status.get("email"))
+
+    def login(self, email: str, password: str, mfa_code: Optional[str] = None) -> None:
+        """One-time headless login via a pseudo-TTY (gccli reads password from TTY)."""
+        self._ensure_available()
+        cmd = [self.gccli_path, "auth", "login", email, "--headless"]
+        if mfa_code:
+            cmd += ["--mfa-code", mfa_code]
+
+        env = self._env(email)
+        output_parts: List[str] = []
+        pid, fd = pty.fork()
+        if pid == 0:
+            # Child
             try:
-                return subprocess.run(
-                    args,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=self.timeout,
-                    check=True,
-                    env=env,
-                )
-            except subprocess.CalledProcessError as e:
-                last_exc = e
-                logger.warning("gccli failed (attempt %d/%d)", attempt, self.max_retries)
-                if attempt < self.max_retries:
-                    sleep(attempt)
-                    continue
-                raise GccliError("gccli call failed") from e
-            except subprocess.TimeoutExpired as e:
-                last_exc = e
-                logger.warning("gccli timed out (attempt %d/%d)", attempt, self.max_retries)
-                if attempt < self.max_retries:
-                    continue
-                raise GccliError("gccli timed out") from e
-        raise last_exc or GccliError("gccli unknown error")
+                os.execvpe(cmd[0], cmd, env)
+            except Exception:  # noqa: BLE001
+                os._exit(127)
 
-    def login(self, username: str, password: str, workdir: str) -> None:
-        self._ensure_available()
-        cmd = [self.gccli_path, "auth", "login", username, "--headless", "--password-stdin"]
-        pfile = None
-        try:
-            pfile = tempfile.NamedTemporaryFile(mode="w+", delete=False, dir=workdir)
-            pfile.write(password)
-            pfile.flush()
-            os.fchmod(pfile.fileno(), 0o600)
-            pfile.close()
-            cmd = [self.gccli_path, "auth", "login", username, "--headless", "--password-file", pfile.name]
-            self._run_cmd(cmd, env=os.environ.copy())
-        finally:
-            if pfile:
+        # Parent
+        sent_pw = False
+        deadline = time.time() + self.timeout
+        exit_code = -1
+        while time.time() < deadline:
+            r, _, _ = select.select([fd], [], [], 0.5)
+            if fd in r:
                 try:
-                    os.remove(pfile.name)
+                    chunk = os.read(fd, 1024)
                 except OSError:
-                    logger.exception("failed to remove temp password file")
+                    break
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                output_parts.append(text)
+                if (not sent_pw) and ("assword" in text):
+                    os.write(fd, (password + "\n").encode())
+                    sent_pw = True
+            try:
+                wpid, status = os.waitpid(pid, os.WNOHANG)
+                if wpid == pid:
+                    exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+                    break
+            except ChildProcessError:
+                break
+            time.sleep(0.15)
 
-    def fetch_activities(self, username: str, password: str, since: Optional[str] = None) -> List[Dict]:
-        self._ensure_available()
-        tmpdir = tempfile.mkdtemp(prefix="gccli-")
         try:
-            self.login(username, password, workdir=tmpdir)
-            cmd = [self.gccli_path, "activities", "list", "--output", "json"]
-            if since:
-                cmd += ["--start-date", since]
-            cp = self._run_cmd(cmd, env=os.environ.copy())
-            return json.loads(cp.stdout.decode("utf-8"))
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            os.close(fd)
+        except OSError:
+            pass
 
-    def get_profile(self, username: str, password: str) -> Dict:
-        self._ensure_available()
-        tmpdir = tempfile.mkdtemp(prefix="gccli-")
-        try:
-            self.login(username, password, workdir=tmpdir)
-            cp = self._run_cmd([self.gccli_path, "profile", "get", "--output", "json"], env=os.environ.copy())
-            return json.loads(cp.stdout.decode("utf-8"))
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        full_output = "".join(output_parts)
+        low = full_output.lower()
+        if exit_code == 0 or "logged in as" in low:
+            logger.info("[gccli] login successful for %s", email)
+            return
+        if "mfa" in low or "two-factor" in low or "verification code" in low:
+            raise GccliMfaRequired("Garmin login requires an MFA code")
+        raise GccliError(f"gccli login failed: {full_output[:300]}")
 
-    def fetch_daily_metrics(self, username: str, password: str, days: int = 7) -> List[Dict]:
-        """Fetch recent daily health stats (HRV, resting HR, sleep) via gccli."""
-        self._ensure_available()
-        tmpdir = tempfile.mkdtemp(prefix="gccli-")
+    # -------------------------------------------------------------- data fetch
+    def fetch_activities(self, limit: int = 20, account: Optional[str] = None) -> List[Dict]:
+        data = self._run_json(["activities", "list", "--limit", str(limit)], account=account)
+        if isinstance(data, list):
+            return data
+        return data.get("activities", []) if isinstance(data, dict) else []
+
+    def fetch_daily_metrics(self, days: int = 7, account: Optional[str] = None) -> List[Dict]:
+        """Combine resting HR (health hr), sleep, and HRV per day."""
+        metrics: List[Dict] = []
+        now = datetime.now(timezone.utc)
+        for i in range(1, days + 1):  # start from yesterday (today often incomplete)
+            day = (now - timedelta(days=i)).date().isoformat()
+            entry: Dict = {"date": day, "source": "garmin"}
+
+            # Resting HR (from health hr — health rhr endpoint 404s on some accounts)
+            try:
+                hr = self._run_json(["health", "hr", day], account=account)
+                if isinstance(hr, dict):
+                    entry["resting_hr"] = hr.get("restingHeartRate")
+            except GccliError:
+                entry["resting_hr"] = None
+
+            # Sleep
+            try:
+                sleep = self._run_json(["health", "sleep", day], account=account)
+                dto = sleep.get("dailySleepDTO", {}) if isinstance(sleep, dict) else {}
+                secs = dto.get("sleepTimeSeconds")
+                entry["sleep_hours"] = round(secs / 3600, 1) if secs else None
+                scores = dto.get("sleepScores") or {}
+                overall = scores.get("overall") or {}
+                entry["sleep_score"] = overall.get("value")
+            except GccliError:
+                entry["sleep_hours"] = None
+                entry["sleep_score"] = None
+
+            # HRV (may be empty for accounts/devices without HRV)
+            try:
+                hrv = self._run_json(["health", "hrv", day], account=account)
+                summary = hrv.get("hrvSummary", {}) if isinstance(hrv, dict) else {}
+                entry["hrv"] = summary.get("lastNightAvg") or summary.get("weeklyAvg")
+            except GccliError:
+                entry["hrv"] = None
+
+            # Only keep days that have at least one real metric
+            if any(entry.get(k) is not None for k in ("resting_hr", "sleep_hours", "hrv")):
+                metrics.append(entry)
+        return metrics
+
+    def get_profile(self, account: Optional[str] = None) -> Dict:
         try:
-            self.login(username, password, workdir=tmpdir)
-            cmd = [self.gccli_path, "health", "daily", "--days", str(days), "--output", "json"]
-            cp = self._run_cmd(cmd, env=os.environ.copy())
-            data = json.loads(cp.stdout.decode("utf-8"))
-            return data if isinstance(data, list) else data.get("days", [])
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            return self._run_json(["auth", "status"], account=account)
+        except GccliError:
+            return {}
