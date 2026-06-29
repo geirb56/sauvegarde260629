@@ -11,6 +11,9 @@ credentials.json
 *.pem
 *.key
 .credentials
+# gccli: arch-specific binary (auto-downloaded at startup) and OAuth token store
+backend/bin/
+backend/.gccli_home/
 .env
 .env.*
 *.env

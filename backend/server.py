@@ -5570,6 +5570,13 @@ async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
     # Expose db via app.state so sub-routers can access it via request.app.state.db
     app.state.db = db
+    # Ensure the gccli Garmin connector is installed + logged in (best-effort,
+    # survives fresh deploys; never blocks startup on failure).
+    try:
+        from garmin.bootstrap import bootstrap as garmin_bootstrap
+        garmin_bootstrap()
+    except Exception as e:
+        logger.warning(f"gccli bootstrap skipped: {e}")
     try:
         # Workouts: filter + sort by user and date
         await db.workouts.create_index([("user_id", 1), ("date", -1)])
