@@ -61,6 +61,17 @@ CardioCoach is a full-stack AI-powered sports coaching app for endurance athlete
 
 # Changelog
 
+## 2025-07 — Garmin connector (invisible, gccli-ready)
+- **Phase 1**: Invisible Garmin connection in onboarding device step. Provider pattern (`backend/garmin/`), MockProvider default (`GARMIN_PROVIDER=mock`), isolated GccliRunner, ephemeral encrypted vault. Endpoints `/api/garmin/connect|sync|status|activities|disconnect`. NON-NEGOTIABLE: no Garmin password ever collected in UI (OAuth-like). MFA Mode 2 supported (mfa_required -> reconnect). 8/8 backend + frontend E2E tests passed.
+- **Phase 2**: Sync now also imports daily health metrics (HRV / resting HR / sleep) into `garmin_daily_metrics` and mirrors activities into the main `workouts` collection (data_source='garmin', id 'garmin-{ext}') so they appear automatically in Dashboard (Recent Workouts) and Progress (All Workouts). New endpoint `GET /api/garmin/daily-metrics`. New "Garmin Health · 7 days" card on Progress (HRV/Resting HR/Sleep). Disconnect cleans garmin metrics + garmin workouts only. 10/10 backend tests passed.
+
+### How to activate the REAL gccli provider (Phase 3 — not live-tested here)
+The real path is implemented (`backend/garmin/providers/gccli_provider.py` + `runner.py`) but inactive because the `gccli` binary and a Garmin account are not available in this environment. To activate later:
+1. Install the gccli binary (https://gccli.sh) so it is on PATH (or set `GCCLI_PATH`).
+2. Set backend env (server-side only, NEVER in UI): `GARMIN_PROVIDER=gccli`, `GARMIN_USERNAME`, `GARMIN_PASSWORD`, optional `GARMIN_VAULT_KEY` (base64 32-byte AES key).
+3. Credentials are loaded backend-side, stored transiently in the ephemeral vault, used for one sync, then destroyed. No code change needed elsewhere (Provider abstraction).
+Note: gccli headless login may require MFA/keyring which is interactive; the runner raises GccliUnavailable and the service surfaces an error/reconnect state in that case.
+
 ## 2025-04-12
 - **Dashboard layout reordered**: Components now appear in user-requested order: 1) Recommandation du jour (score + RUN HARD/EASY/REST), 2) Métriques du jour (6 widgets), 3) Séance du jour, 4) Séances récentes. Animation delays updated accordingly.
 
