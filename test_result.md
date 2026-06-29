@@ -151,7 +151,7 @@ backend:
 frontend:
   - task: "Onboarding device step — invisible Garmin connection (no password)"
     implemented: true
-    working: "NA"
+    working: true
     file: "frontend/src/pages/Onboarding.jsx"
     stuck_count: 0
     priority: "high"
@@ -160,18 +160,18 @@ frontend:
         - working: "NA"
           agent: "main"
           comment: "Selecting Garmin in device step reveals a 'Connect Garmin' button that calls /api/garmin/connect then /api/garmin/sync. Shows 'Garmin connected · N activities synced'. Handles mfa_required (retry) and error states. NO password field anywhere. Screenshot-verified working end-to-end (7 activities synced)."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED END-TO-END: Complete 6-step onboarding flow tested successfully. Step 1 (Welcome): 'Start my optimization' button works. Step 2 (Fitness): Selected 'Intermediate', continued. Step 3 (Goal): Selected 'Improve performance', continued. Step 4 (Frequency): Selected '3–4 times/week', continued. Step 5 (Device - CRITICAL): Selected Garmin, verified NO password/email fields present (0 password fields, 0 email fields, 0 text inputs), clicked 'Connect Garmin', successfully connected with 7 activities synced, 'Garmin connected' toast displayed, verified again NO password/email fields appeared during connection. Step 6 (Target): Selected '10km', personalized recommendation rendered ('Intermediate plan for 10km'), clicked 'Apply my plan', 'Personalized plan updated' toast displayed, successfully navigated to /training page with training plan visible. CRITICAL CONSTRAINT VERIFIED: NO Garmin credentials ever requested in UI. No console errors or network failures detected. All data-testids working correctly."
 
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 2
+  test_sequence: 3
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Garmin connect endpoint (POST /api/garmin/connect)"
-    - "Garmin sync endpoint (POST /api/garmin/sync) + normalized storage"
-    - "Garmin status / activities / disconnect endpoints"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -183,3 +183,5 @@ agent_communication:
       message: "All 8 backend Garmin connector tests PASSED. connect (no password required), sync (9 activities normalized), status, activities (all normalized fields present), MFA Mode 2 (mfa_required -> connected on retry), sync-before-connect guard (graceful success=false, no 500), disconnect cleanup, and idempotency (no duplicate activities) all working. CRITICAL CONSTRAINT VERIFIED: connect does NOT accept/require a Garmin password. Backend ready."
     - agent: "testing"
       message: "✅ ALL BACKEND TESTS PASSED (8/8). Comprehensive testing completed for all Garmin connector endpoints. Test results: (1) Connect endpoint works without password - only user_id param required ✓ (2) Sync endpoint successfully imports activities (9 synced) ✓ (3) Status endpoint returns correct connection state and activity count ✓ (4) Activities endpoint returns normalized data with all required fields (external_id, source=garmin, distance, duration, pace, avg_hr) ✓ (5) MFA Mode 2 simulation working correctly (mfa_required -> connected on retry) ✓ (6) Sync-before-connect guard prevents sync for unconnected users (graceful failure) ✓ (7) Disconnect properly cleans up connection and activities ✓ (8) Idempotency verified - no duplicate activities on repeated syncs ✓. CRITICAL CONSTRAINT VERIFIED: NO Garmin password required or accepted anywhere. MockProvider working as expected. All endpoints production-ready."
+    - agent: "testing"
+      message: "✅ FRONTEND ONBOARDING FLOW FULLY TESTED AND WORKING. Complete end-to-end test of 6-step onboarding flow at https://charge-load.preview.emergentagent.com/onboarding passed all checks. All steps (Welcome → Fitness → Goal → Frequency → Device → Target) working correctly. CRITICAL GARMIN CONNECTION VERIFIED: (1) NO password/email fields ever displayed (verified before and after connection: 0 password fields, 0 email fields, 0 text inputs) ✓✓✓ (2) 'Connect Garmin' button visible and functional ✓ (3) Connection successful with 7 activities synced ✓ (4) Success toast 'Garmin connected' displayed ✓ (5) Connected state shows 'Garmin connected · 7 activities synced' ✓ (6) Personalized recommendation rendered correctly ✓ (7) Successfully navigated to /training page with plan applied ✓ (8) 'Personalized plan updated' toast displayed ✓. No console errors or network failures detected. All data-testids working as expected. CRITICAL CONSTRAINT FULLY VERIFIED: Invisible Garmin connection (OAuth-like) working perfectly with NO credentials ever requested from user."
