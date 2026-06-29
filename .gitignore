@@ -1,13 +1,12 @@
 # Ignore env, pyc, virtualenv
-.env
+# NOTE: .env files are intentionally NOT ignored — Emergent deployment requires
+# them to be present in the repository for auto-configuration.
 __pycache__/
 *.pyc
-.env.*
 .idea/
 .vscode/
 instance/
 *.db
-*.env
 credentials.json
 *.pem
 *.key
