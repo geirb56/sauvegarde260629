@@ -104,3 +104,28 @@ class MockProvider(Provider):
             "display_name": "Mock Athlete",
             "connected": True,
         }
+
+    def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
+        rng = random.Random(self._seed(user_id) + 7919)
+        now = datetime.now(timezone.utc)
+        # Stable per-user baselines
+        base_hrv = rng.randint(48, 78)
+        base_rhr = rng.randint(42, 56)
+        metrics: List[Dict] = []
+        for i in range(days):
+            day = (now - timedelta(days=i)).date().isoformat()
+            hrv = max(20, base_hrv + rng.randint(-12, 12))
+            resting_hr = max(35, base_rhr + rng.randint(-4, 6))
+            sleep_hours = round(rng.uniform(5.5, 8.7), 1)
+            sleep_score = rng.randint(55, 95)
+            metrics.append(
+                {
+                    "date": day,
+                    "hrv": hrv,
+                    "resting_hr": resting_hr,
+                    "sleep_hours": sleep_hours,
+                    "sleep_score": sleep_score,
+                    "source": "garmin",
+                }
+            )
+        return metrics

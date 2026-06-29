@@ -5593,6 +5593,7 @@ async def create_db_indexes():
         await db.garmin_connections.create_index("user_id", unique=True, sparse=True)
         await db.garmin_activities.create_index([("user_id", 1), ("external_id", 1)], unique=True, sparse=True)
         await db.garmin_activities.create_index([("user_id", 1), ("start_time", -1)])
+        await db.garmin_daily_metrics.create_index([("user_id", 1), ("date", -1)], unique=True, sparse=True)
         logger.info("MongoDB indexes created")
     except Exception as e:
         logger.warning(f"Could not create some MongoDB indexes: {e}")

@@ -115,3 +115,16 @@ class GccliRunner:
             return json.loads(cp.stdout.decode("utf-8"))
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def fetch_daily_metrics(self, username: str, password: str, days: int = 7) -> List[Dict]:
+        """Fetch recent daily health stats (HRV, resting HR, sleep) via gccli."""
+        self._ensure_available()
+        tmpdir = tempfile.mkdtemp(prefix="gccli-")
+        try:
+            self.login(username, password, workdir=tmpdir)
+            cmd = [self.gccli_path, "health", "daily", "--days", str(days), "--output", "json"]
+            cp = self._run_cmd(cmd, env=os.environ.copy())
+            data = json.loads(cp.stdout.decode("utf-8"))
+            return data if isinstance(data, list) else data.get("days", [])
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)

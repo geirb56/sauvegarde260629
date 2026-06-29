@@ -83,6 +83,17 @@ class GccliProvider(Provider):
         finally:
             self._vault.delete(token)
 
+    def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
+        token = self._vault.token_for_user(user_id)
+        if token is None:
+            raise GccliError("No active Garmin session for user")
+        try:
+            username, password = self._vault.get(token)
+            raw = self._runner.fetch_daily_metrics(username=username, password=password, days=days)
+            return [self._normalize_metric(m) for m in raw]
+        finally:
+            self._vault.delete(token)
+
     @staticmethod
     def _normalize(raw: Dict) -> Dict:
         return {
@@ -96,4 +107,16 @@ class GccliProvider(Provider):
             "avg_hr": raw.get("avg_hr") or raw.get("averageHR"),
             "pace": raw.get("avg_pace") or raw.get("pace"),
             "raw_payload": raw,
+        }
+
+    @staticmethod
+    def _normalize_metric(raw: Dict) -> Dict:
+        return {
+            "date": raw.get("date") or raw.get("calendarDate"),
+            "hrv": raw.get("hrv") or raw.get("hrvWeeklyAvg") or raw.get("avgHrv"),
+            "resting_hr": raw.get("resting_hr") or raw.get("restingHeartRate"),
+            "sleep_hours": raw.get("sleep_hours")
+            or (raw.get("sleepTimeSeconds", 0) / 3600 if raw.get("sleepTimeSeconds") else None),
+            "sleep_score": raw.get("sleep_score") or raw.get("sleepScore"),
+            "source": "garmin",
         }

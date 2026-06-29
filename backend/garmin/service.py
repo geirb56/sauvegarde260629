@@ -36,17 +36,60 @@ async def connect(db, user_id: str, simulate_mfa: bool = False) -> dict:
     return {"status": result.status, "message": result.detail, "provider": active_provider_name()}
 
 
+_ACTIVITY_TYPE_TO_WORKOUT = {
+    "running": "run",
+    "trail_running": "run",
+    "treadmill_running": "run",
+    "cycling": "cycle",
+    "biking": "cycle",
+    "swimming": "swim",
+}
+
+
+def _activity_to_workout(act: dict, user_id: str) -> Optional[dict]:
+    """Map a normalized Garmin activity to the app's workout schema.
+
+    Returns None if essential fields are missing.
+    """
+    ext_id = act.get("external_id")
+    if not ext_id:
+        return None
+    distance_m = act.get("distance") or 0
+    duration_s = act.get("duration") or 0
+    distance_km = round(distance_m / 1000.0, 2) if distance_m else 0.0
+    duration_minutes = int(round(duration_s / 60.0)) if duration_s else 0
+    pace_spk = act.get("pace_seconds_per_km")
+    avg_pace_min_km = round(pace_spk / 60.0, 3) if pace_spk else None
+    atype = (act.get("activity_type") or "running").lower()
+    wtype = _ACTIVITY_TYPE_TO_WORKOUT.get(atype, "run")
+    return {
+        "id": f"garmin-{ext_id}",
+        "type": wtype,
+        "name": act.get("name") or "Garmin Activity",
+        "date": act.get("start_time") or datetime.now(timezone.utc).isoformat(),
+        "duration_minutes": duration_minutes,
+        "distance_km": distance_km,
+        "avg_heart_rate": act.get("avg_hr"),
+        "avg_pace_min_km": avg_pace_min_km,
+        "data_source": "garmin",
+        "user_id": user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if not conn or not conn.get("connected"):
-        return {"success": False, "synced_count": 0, "message": "Garmin not connected"}
+        return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Garmin not connected"}
 
     provider = get_provider()
+
+    # --- Activities ---
     try:
         activities = provider.sync_activities(user_id, since=since)
     except Exception as exc:  # provider/runner failures -> graceful
-        logger.error("[Garmin] sync failed user=%s: %s", user_id, exc)
-        return {"success": False, "synced_count": 0, "message": "Sync failed, please reconnect"}
+        logger.error("[Garmin] activity sync failed user=%s: %s", user_id, exc)
+        return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Sync failed, please reconnect"}
 
     synced = 0
     for act in activities:
@@ -59,7 +102,33 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
             {"$set": doc},
             upsert=True,
         )
+        # Mirror into the main workouts collection so the activity appears in
+        # Dashboard (Recent Workouts) and Progress (All Workouts).
+        workout_doc = _activity_to_workout(act, user_id)
+        if workout_doc:
+            await db.workouts.update_one(
+                {"id": workout_doc["id"]},
+                {"$set": workout_doc},
+                upsert=True,
+            )
         synced += 1
+
+    # --- Daily health metrics (Phase 2: HRV / resting HR / sleep) ---
+    metrics_count = 0
+    try:
+        metrics = provider.get_daily_metrics(user_id, days=7)
+        for m in metrics:
+            day = m.get("date")
+            if not day:
+                continue
+            await db.garmin_daily_metrics.update_one(
+                {"user_id": user_id, "date": day},
+                {"$set": {**m, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}},
+                upsert=True,
+            )
+            metrics_count += 1
+    except Exception as exc:
+        logger.warning("[Garmin] daily metrics sync skipped user=%s: %s", user_id, exc)
 
     total = await db.garmin_activities.count_documents({"user_id": user_id})
     await db.garmin_connections.update_one(
@@ -69,8 +138,13 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
             "activity_count": total,
         }},
     )
-    logger.info("[Garmin] synced %d activities user=%s", synced, user_id)
-    return {"success": True, "synced_count": synced, "message": f"Imported {synced} activities"}
+    logger.info("[Garmin] synced %d activities, %d daily metrics user=%s", synced, metrics_count, user_id)
+    return {
+        "success": True,
+        "synced_count": synced,
+        "metrics_count": metrics_count,
+        "message": f"Imported {synced} activities",
+    }
 
 
 async def get_status(db, user_id: str) -> dict:
@@ -93,8 +167,22 @@ async def get_status(db, user_id: str) -> dict:
 async def disconnect(db, user_id: str) -> dict:
     await db.garmin_connections.delete_one({"user_id": user_id})
     await db.garmin_activities.delete_many({"user_id": user_id})
+    await db.garmin_daily_metrics.delete_many({"user_id": user_id})
+    # Remove mirrored Garmin workouts only (keep manual/other-source workouts)
+    await db.workouts.delete_many({"user_id": user_id, "data_source": "garmin"})
     logger.info("[Garmin] disconnected user=%s", user_id)
     return {"success": True, "message": "Garmin disconnected"}
+
+
+async def get_daily_metrics(db, user_id: str, days: int = 7) -> dict:
+    cursor = (
+        db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
+        .sort("date", -1)
+        .limit(days)
+    )
+    metrics = await cursor.to_list(length=days)
+    latest = metrics[0] if metrics else None
+    return {"metrics": metrics, "latest": latest, "count": len(metrics)}
 
 
 async def list_activities(db, user_id: str, limit: int = 20) -> list:

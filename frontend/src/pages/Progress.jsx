@@ -27,7 +27,9 @@ import {
   Zap,
   Target,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Heart,
+  Moon
 } from "lucide-react";
 import Paywall from "@/components/Paywall";
 
@@ -50,6 +52,7 @@ export default function Progress() {
   const [predictions, setPredictions] = useState(null);
   const [fullCycle, setFullCycle] = useState(null);
   const [vmaHistory, setVmaHistory] = useState(null);
+  const [garminHealth, setGarminHealth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showPredictions, setShowPredictions] = useState(true);
   const { t, lang } = useLanguage();
@@ -68,6 +71,14 @@ export default function Progress() {
         ]);
         setStats(statsRes.data);
         setWorkouts(workoutsRes.data);
+
+        // Garmin daily health metrics (HRV / resting HR / sleep)
+        try {
+          const garminRes = await axios.get(`${API}/garmin/daily-metrics?user_id=${USER_ID}&days=7`);
+          if (garminRes.data?.count > 0) setGarminHealth(garminRes.data);
+        } catch {
+          /* Garmin not connected — section stays hidden */
+        }
 
         let vmaData = vmaHistoryRes.data;
         if (!vmaData?.has_data) {
@@ -175,6 +186,64 @@ export default function Progress() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Garmin Health (HRV / Resting HR / Sleep) */}
+      {garminHealth?.latest && (
+        <div className="mb-8" data-testid="garmin-health-section">
+          <div className="flex items-center gap-2 mb-3">
+            <Heart className="w-4 h-4 text-rose-500" />
+            <h2 className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+              Garmin Health · 7 days
+            </h2>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Card className="bg-card border-border" data-testid="garmin-hrv">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Activity className="w-4 h-4 text-emerald-500" />
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    HRV
+                  </span>
+                </div>
+                <p className="font-heading text-3xl font-bold text-white">
+                  {garminHealth.latest.hrv ?? "--"}
+                  <span className="text-sm text-muted-foreground ml-1">ms</span>
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-card border-border" data-testid="garmin-resting-hr">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Heart className="w-4 h-4 text-rose-500" />
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Resting HR
+                  </span>
+                </div>
+                <p className="font-heading text-3xl font-bold text-white">
+                  {garminHealth.latest.resting_hr ?? "--"}
+                  <span className="text-sm text-muted-foreground ml-1">bpm</span>
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-card border-border" data-testid="garmin-sleep">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Moon className="w-4 h-4 text-violet-400" />
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Sleep
+                  </span>
+                </div>
+                <p className="font-heading text-3xl font-bold text-white">
+                  {garminHealth.latest.sleep_hours ?? "--"}
+                  <span className="text-sm text-muted-foreground ml-1">h</span>
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
 
       {/* VO2MAX Section with Chart */}
       {(predictions?.has_data || vmaHistory?.has_data) && (

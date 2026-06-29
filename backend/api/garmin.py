@@ -54,3 +54,9 @@ async def garmin_activities(request: Request, user_id: str = "default", limit: i
     db = request.app.state.db
     items = await garmin_service.list_activities(db, user_id, limit=limit)
     return {"activities": items, "count": len(items)}
+
+
+@garmin_router.get("/daily-metrics")
+async def garmin_daily_metrics(request: Request, user_id: str = "default", days: int = 7):
+    db = request.app.state.db
+    return await garmin_service.get_daily_metrics(db, user_id, days=days)
