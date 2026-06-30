@@ -93,6 +93,9 @@ A fresh production container will NOT have the gccli binary or the token. Before
 - `/api/training/today` no longer depends on mock_runner — uses neutral defaults if cardio-coach is unavailable.
 - Verified: `/api/mock-runner` → 404, cardio-coach still real (source:garmin), `/training/today` → success, Dashboard + Progress render real data (VO2max 54.7, race predictions, Garmin Health). Kept (separate, out of scope): `_CARDIO_COACH_MOCK_DATA` (cardio-coach fallback when Garmin not connected), `get_mock_workouts` (workouts fallback), `DEMO_MODE` (Stripe bypass).
 
+### get_mock_workouts() fully removed (DONE)
+Deleted the `get_mock_workouts()` function and removed its fallback from all 8 endpoints (GET /api/workouts, GET /api/workouts/{id}, dashboard insight, /coach/guidance, /coach/digest, /coach/workout-analysis/{id}, /coach/detailed-analysis/{id}, /coach chat). The analysis endpoints query the global workouts collection (now filled with real Garmin activities) and the local engines handle empty lists. Verified (14/14 backend tests): no 500s, empty-user → [] , bogus workout id → 404, all coach/dashboard endpoints 200 with real Garmin data, cardio-coach still source=garmin. Remaining mocks: `_CARDIO_COACH_MOCK_DATA` (cardio-coach fallback only when Garmin not connected) and `DEMO_MODE` (Stripe subscription bypass).
+
 ## 2025-04-12
 - **Dashboard layout reordered**: Components now appear in user-requested order: 1) Recommandation du jour (score + RUN HARD/EASY/REST), 2) Métriques du jour (6 widgets), 3) Séance du jour, 4) Séances récentes. Animation delays updated accordingly.
 
