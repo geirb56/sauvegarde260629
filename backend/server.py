@@ -2850,7 +2850,9 @@ async def get_cardio_coach(user_id: str = "default"):
     rhr_delta = float(rhr_today) - float(rhr_baseline)            # positive → RHR above baseline (bad)
     sleep_score = max(0.0, 8.0 - sleep_hours) + (1.0 - sleep_efficiency) * 2.0
     fatigue_physio = 0.5 * hrv_delta + 0.3 * rhr_delta + 0.2 * sleep_score
-    fatigue_ratio = fatigue_physio / training_load
+    # Fatigue Ratio = physiological fatigue only, centred on 1.0 (NOT divided by
+    # ACWR; training load is reported separately). Higher = more fatigued.
+    fatigue_ratio = 1.0 + max(0.0, fatigue_physio) / 10.0
     # ----------------------------------------------------------------
     # Recommendation.
     # ----------------------------------------------------------------
@@ -2927,7 +2929,7 @@ async def get_cardio_coach(user_id: str = "default"):
             doc_eff = 0.80
         doc_sleep_score = max(0.0, 8.0 - doc_sleep) + (1.0 - doc_eff) * 2.0
         doc_fatigue_physio = 0.5 * doc_hrv_delta + 0.3 * doc_rhr_delta + 0.2 * doc_sleep_score
-        doc_fatigue_ratio = doc_fatigue_physio / training_load
+        doc_fatigue_ratio = 1.0 + max(0.0, doc_fatigue_physio) / 10.0
 
         history.append({
             "day": day_label,

@@ -191,7 +191,10 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
     fatigue_physio = hrv_term + w_rhr * rhr_delta + w_sleep * sleep_penalty
     # Fatigue cannot be negative; a very fresh state is simply 0.
     fatigue_physio = max(0.0, fatigue_physio)
-    fatigue_ratio = fatigue_physio / training_load
+    # Fatigue Ratio = physiological fatigue only (RHR/HRV/sleep), centred on 1.0.
+    # NOT divided by ACWR: training load is shown separately. Higher = more fatigued.
+    # 1.0 fresh · ~1.2 moderate · >1.5 high.
+    fatigue_ratio = 1.0 + fatigue_physio / 10.0
 
     # --- Run Readiness (SINGLE SOURCE OF TRUTH, computed backend-side) ---
     # Score 0-100. Two penalties subtracted from a fresh baseline of 100:
@@ -259,7 +262,7 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
             doc_fp = 0.5 * (float(hrv_baseline) - float(doc_hrv)) + 0.3 * doc_rhr_delta + 0.2 * doc_sleep_penalty
         else:
             doc_fp = 0.6 * doc_rhr_delta + 0.4 * doc_sleep_penalty
-        doc_fatigue_ratio = max(0.0, doc_fp) / training_load
+        doc_fatigue_ratio = 1.0 + max(0.0, doc_fp) / 10.0
         history.append({
             "day": day_label,
             "date": doc.get("date"),
