@@ -76,6 +76,19 @@ def _mean(values: List[float]) -> Optional[float]:
     return sum(vals) / len(vals)
 
 
+def _latest_with(metrics_docs: List[dict], key: str) -> Optional[dict]:
+    """Return the most recent metrics doc whose `key` is a real (non-null) value.
+
+    metrics_docs is sorted newest-first. This guarantees a REAL device value
+    (e.g. HRV) is used whenever the device actually reported one, instead of
+    falling back to the degraded model just because the very latest day is empty.
+    """
+    for doc in metrics_docs:
+        if doc.get(key) is not None:
+            return doc
+    return None
+
+
 async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
     """Build the cardio-coach payload from real Garmin data, or None if no data."""
     # --- Daily health metrics (most recent first) ---
@@ -97,11 +110,16 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
 
     today = datetime.now(timezone.utc).date()
 
-    latest = metrics_docs[0] if metrics_docs else {}
-    hrv_today = latest.get("hrv")
-    rhr_today = latest.get("resting_hr")
-    sleep_hours = latest.get("sleep_hours")
-    sleep_score_raw = latest.get("sleep_score")  # 0-100 or None
+    # Use the most RECENT REAL (non-null) reading per metric. If the device
+    # actually reported HRV, that real value is used (never recomputed/faked).
+    hrv_doc = _latest_with(metrics_docs, "hrv")
+    rhr_doc = _latest_with(metrics_docs, "resting_hr")
+    sleep_doc = _latest_with(metrics_docs, "sleep_hours")
+
+    hrv_today = hrv_doc.get("hrv") if hrv_doc else None
+    rhr_today = rhr_doc.get("resting_hr") if rhr_doc else None
+    sleep_hours = sleep_doc.get("sleep_hours") if sleep_doc else None
+    sleep_score_raw = (sleep_doc.get("sleep_score") if sleep_doc else None)  # 0-100 or None
 
     have_hrv = hrv_today is not None
     have_rhr = rhr_today is not None
@@ -137,6 +155,8 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
         w_hrv, w_rhr, w_sleep = 0.0, 0.6, 0.4
         hrv_term = 0.0
     fatigue_physio = hrv_term + w_rhr * rhr_delta + w_sleep * sleep_penalty
+    # Fatigue cannot be negative; a very fresh state is simply 0.
+    fatigue_physio = max(0.0, fatigue_physio)
     fatigue_ratio = fatigue_physio / training_load
 
     # --- Recommendation ---
@@ -188,7 +208,7 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
             doc_fp = 0.5 * (float(hrv_baseline) - float(doc_hrv)) + 0.3 * doc_rhr_delta + 0.2 * doc_sleep_penalty
         else:
             doc_fp = 0.6 * doc_rhr_delta + 0.4 * doc_sleep_penalty
-        doc_fatigue_ratio = doc_fp / training_load
+        doc_fatigue_ratio = max(0.0, doc_fp) / training_load
         history.append({
             "day": day_label,
             "date": doc.get("date"),
