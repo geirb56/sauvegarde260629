@@ -611,7 +611,7 @@ export default function Dashboard() {
                     <MetricWidget
                       icon={Heart}
                       label={t("dashboard.hrvDeviation")}
-                      value={m.hrv_delta !== undefined ? (m.hrv_delta >= 0 ? `+${m.hrv_delta}` : `${m.hrv_delta}`) : "—"}
+                      value={(m.hrv_delta === undefined || m.hrv_delta === null) ? "—" : (m.hrv_delta >= 0 ? `+${m.hrv_delta}` : `${m.hrv_delta}`)}
                       unit="ms"
                       status={m.hrv_status || "green"}
                       detail={`${t("dashboard.today")} ${m.hrv_today ?? "—"} ms`}

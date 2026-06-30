@@ -3013,6 +3013,21 @@ async def get_cardio_coach(user_id: str = "default"):
     today_iso = today.isoformat()
 
     # ----------------------------------------------------------------
+    # Prefer REAL Garmin data when the Garmin connector is active.
+    # Resting HR + sleep come from gccli; training load / ACWR / fatigue
+    # ratio / readiness are computed from the real synced activities.
+    # ----------------------------------------------------------------
+    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    if garmin_conn and garmin_conn.get("connected"):
+        try:
+            from garmin.insights import compute_cardio_coach
+            garmin_payload = await compute_cardio_coach(db, user_id)
+            if garmin_payload:
+                return garmin_payload
+        except Exception as e:
+            logger.warning(f"[cardio-coach] Garmin computation failed, falling back: {e}")
+
+    # ----------------------------------------------------------------
     # Load Terra token — fall back to mock data when absent.
     # ----------------------------------------------------------------
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
