@@ -78,6 +78,14 @@ A fresh production container will NOT have the gccli binary or the token. Before
 1. Install the `gccli` binary for the TARGET architecture (prod may be amd64, not arm64) and put it on PATH (or set `GCCLI_PATH`).
 2. Provide `GARMIN_USERNAME`/`GARMIN_PASSWORD` env (already in backend/.env). The first `connect` will auto-login and persist the token (no MFA on this account). If the account ever enables MFA, an interactive one-time `--mfa-code` login on the server is required.
 
+### Dashboard block now powered by REAL Garmin data (DONE)
+`GET /api/cardio-coach` (the Dashboard "Run Readiness" + metrics block) no longer returns `_CARDIO_COACH_MOCK_DATA` when Garmin is connected. New `backend/garmin/insights.py::compute_cardio_coach`:
+- **Resting HR + Sleep**: real values from `garmin_daily_metrics` (gccli `health hr` / `health sleep`).
+- **Training load / ACWR**: computed from real `garmin_activities` (ACWR = 7-day vs 28-day daily-load average, load proxy = session minutes).
+- **Fatigue ratio / readiness / recommendation**: computed with the existing formula; `fatigue_ratio` clamped >= 0.
+- **HRV**: if the device reports real HRV it is USED (full 0.5/0.3/0.2 formula, most-recent non-null reading); if absent (this account), the model gracefully reweights to RHR+sleep+load, HRV fields are null (UI shows "—"), reason "HRV not recorded by your Garmin device". Verified both paths.
+- Mock kept only as a last-resort fallback (Garmin not connected). VMA history & race predictions already compute from real activities (has_data:true). Tested: 16/16 + regression passed; Dashboard renders real data.
+
 ## 2025-04-12
 - **Dashboard layout reordered**: Components now appear in user-requested order: 1) Recommandation du jour (score + RUN HARD/EASY/REST), 2) Métriques du jour (6 widgets), 3) Séance du jour, 4) Séances récentes. Animation delays updated accordingly.
 
