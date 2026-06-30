@@ -432,15 +432,8 @@ export default function Dashboard() {
       const res = await axios.get(`${API}/cardio-coach?user_id=default`);
       setCardioData(res.data);
     } catch (err) {
-      console.error("CardioCoach fetch failed, trying mock API:", err);
-      try {
-        const mockRes = await axios.get(`${API}/mock-runner`);
-        setCardioData(mockRes.data.today);
-        setCardioError("Live data unavailable — showing dynamic demo.");
-      } catch (mockErr) {
-        console.error("Mock API also failed:", mockErr);
-        setCardioError("Unable to load data.");
-      }
+      console.error("CardioCoach fetch failed:", err);
+      setCardioError("Unable to load data.");
     } finally {
       setCardioLoading(false);
     }

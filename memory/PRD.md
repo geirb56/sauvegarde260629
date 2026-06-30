@@ -86,6 +86,13 @@ A fresh production container will NOT have the gccli binary or the token. Before
 - **HRV**: if the device reports real HRV it is USED (full 0.5/0.3/0.2 formula, most-recent non-null reading); if absent (this account), the model gracefully reweights to RHR+sleep+load, HRV fields are null (UI shows "—"), reason "HRV not recorded by your Garmin device". Verified both paths.
 - Mock kept only as a last-resort fallback (Garmin not connected). VMA history & race predictions already compute from real activities (has_data:true). Tested: 16/16 + regression passed; Dashboard renders real data.
 
+### Frontend mock fallbacks REMOVED + mock_runner endpoints deleted (DONE)
+- Removed `Dashboard.jsx` fallback to `/api/mock-runner` (on cardio-coach error → now shows a clean error state, no fake demo).
+- Removed `Progress.jsx` fallbacks to `/api/mock-runner/vma-history` and `/api/mock-runner/race-predictions` (real `/training/*` endpoints return has_data:true from real activities).
+- Deleted `backend/api/mock_runner.py` and its router registration; `/api/mock-runner*` now returns 404.
+- `/api/training/today` no longer depends on mock_runner — uses neutral defaults if cardio-coach is unavailable.
+- Verified: `/api/mock-runner` → 404, cardio-coach still real (source:garmin), `/training/today` → success, Dashboard + Progress render real data (VO2max 54.7, race predictions, Garmin Health). Kept (separate, out of scope): `_CARDIO_COACH_MOCK_DATA` (cardio-coach fallback when Garmin not connected), `get_mock_workouts` (workouts fallback), `DEMO_MODE` (Stripe bypass).
+
 ## 2025-04-12
 - **Dashboard layout reordered**: Components now appear in user-requested order: 1) Recommandation du jour (score + RUN HARD/EASY/REST), 2) Métriques du jour (6 widgets), 3) Séance du jour, 4) Séances récentes. Animation delays updated accordingly.
 

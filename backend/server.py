@@ -83,9 +83,6 @@ from demo_mode import get_demo_subscription, is_subscription_active, patch_subsc
 # Import physiological engine dashboard router
 from api.dashboard import dashboard_router
 
-# Import dynamic mock runner API
-from api.mock_runner import mock_runner_router
-
 # Import Terra integration module
 from terra_integration import (
     syncDailyMetrics,
@@ -3537,8 +3534,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
 
     # 2. Get current fatigue level from cardio-coach
     # Use a direct call without auth to avoid circular dependency
-    # Falls back to mock_runner data if cardio-coach fails (e.g., no Terra data)
-    fatigue_data_source = "terra"
+    # Falls back to neutral defaults if cardio-coach is unavailable
+    fatigue_data_source = "garmin"
     try:
         cardio_coach_data = await get_cardio_coach(user_id=user["id"])
         fatigue_ratio = cardio_coach_data.get("metrics", {}).get("fatigue_ratio")
@@ -3551,20 +3548,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             raise ValueError("Missing fatigue metrics from cardio-coach")
             
     except Exception as e:
-        # Fallback to mock_runner data
-        logger.warning(f"[TrainingToday] cardio-coach failed, using mock_runner fallback: {e}")
-        fatigue_data_source = "mock"
-        
-        # Import and call mock_runner to get realistic fallback data
-        from api.mock_runner import _build_full_profile
-        mock_profile = _build_full_profile()
-        mock_today = mock_profile.get("today", {})
-        mock_metrics = mock_today.get("metrics", {})
-        
-        fatigue_ratio = mock_metrics.get("fatigue_ratio", 1.0)
-        fatigue_status = mock_metrics.get("fatigue_status", "green")
-        recommendation = mock_today.get("recommendation", "RUN HARD")
-        recommendation_color = mock_today.get("recommendation_color", "green")
+        # Neutral defaults if cardio-coach is unavailable (no mock dependency).
+        logger.warning(f"[TrainingToday] cardio-coach unavailable, using neutral defaults: {e}")
+        fatigue_data_source = "default"
+        fatigue_ratio = 1.0
+        fatigue_status = "green"
+        recommendation = "RUN HARD"
+        recommendation_color = "green"
 
     # 3. Get historical feedback for this user
     feedback_cursor = db.training_feedback.find(
@@ -5557,9 +5547,6 @@ async def verify_checkout_session(session_id: str, user_id: str = "default"):
         logger.error(f"Verify checkout error: {e}")
         return {"success": False, "error": str(e)}
 
-
-# Register mock runner endpoints under /api
-api_router.include_router(mock_runner_router)
 
 # Register Garmin connector endpoints under /api (/api/garmin/*)
 from api.garmin import garmin_router
