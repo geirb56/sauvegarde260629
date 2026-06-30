@@ -3431,16 +3431,26 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     load_7 = sum(get_distance(a) for a in activities_7)
     load_28 = sum(get_distance(a) for a in activities_28)
     
-    # ACWR
+    # ACWR & TSB — distance-based fallback (used only if no Garmin activities)
     chronic_avg = load_28 / 4 if load_28 > 0 else 1
     acwr = round(load_7 / chronic_avg, 2) if chronic_avg > 0 else 1.0
-    
-    # TSB simplifié (basé sur la différence entre charge récente et moyenne)
-    # CTL = moyenne mobile sur 42 jours (approximé par 28j/4*6)
-    # ATL = moyenne mobile sur 7 jours
     ctl = load_28 / 4  # Approximation fitness
     atl = load_7  # Fatigue récente
     tsb = round(ctl - atl, 1)
+
+    # SINGLE SOURCE OF TRUTH: align ACWR/CTL/ATL/TSB with the Dashboard
+    # (duration-based load on real Garmin activities). load_7/load_28 below
+    # stay distance-based (km) for the "THIS WEEK" / "28D LOAD" cards.
+    try:
+        from garmin.insights import compute_training_load_metrics
+        load_metrics = await compute_training_load_metrics(db, user["id"])
+        if load_metrics:
+            acwr = load_metrics["acwr"]
+            ctl = load_metrics["ctl"]
+            atl = load_metrics["atl"]
+            tsb = load_metrics["tsb"]
+    except Exception as e:
+        logger.warning(f"[training/metrics] Garmin load metrics unavailable, using distance fallback: {e}")
     
     # Calculer la monotonie (7 derniers jours)
     daily_loads = []
