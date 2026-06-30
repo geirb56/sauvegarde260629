@@ -18,6 +18,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
+from training_engine import compute_target_km, compute_long_run_km, VOLUME_GOAL_CONFIG
 
 load_dotenv()
 
@@ -257,26 +258,16 @@ async def generate_cycle_week(
     # Athlete's current volume (based on last 4 weeks)
     current_weekly_km = context.get('weekly_km', 30)
 
-    # Goal configurations
-    goal_configs = {
-        "5K": {"min": 15, "max": 45, "sessions": 3, "long_min": 8, "long_max": 10},
-        "10K": {"min": 20, "max": 60, "sessions": 3, "long_min": 10, "long_max": 14},
-        "SEMI": {"min": 30, "max": 80, "sessions": 4, "long_min": 16, "long_max": 18},
-        "MARATHON": {"min": 40, "max": 120, "sessions": 4, "long_min": 28, "long_max": 32},
-        "ULTRA": {"min": 50, "max": 150, "sessions": 5, "long_min": 35, "long_max": 45},
-    }
-    config = goal_configs.get(goal, goal_configs["SEMI"])
+    config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
 
     # Number of sessions
     target_sessions = sessions_per_week if sessions_per_week in [3, 4, 5, 6] else config["sessions"]
 
-    # Target volume: +7% progressive
-    progression_factor = 1.07 if phase != "deload" else 0.75
-    target_km = max(config["min"], min(config["max"], round(current_weekly_km * progression_factor)))
+    # Target weekly volume — single source of truth shared with cycle overview
+    target_km = compute_target_km(current_weekly_km, goal, phase)
 
-    # Long run distance
-    long_ratio = (target_km - config["min"]) / (config["max"] - config["min"]) if config["max"] > config["min"] else 0.5
-    target_long_run = round(config["long_min"] + long_ratio * (config["long_max"] - config["long_min"]))
+    # Long run distance, capped so it never exceeds the weekly target
+    target_long_run = min(compute_long_run_km(target_km, goal), max(0, round(target_km * 0.5)))
 
     # Use personalized paces or defaults
     paces = personalized_paces or context.get('paces', {})
@@ -343,14 +334,19 @@ async def generate_cycle_week(
                 "distance_km": distance
             }
         
-        # Standard sessions: duration is primary, distance is calculated
+        # Standard sessions: distance-primary when a custom distance is given
+        # (volume-driven), otherwise fall back to duration-primary.
         template = session_templates.get(session_type, session_templates["Endurance"])
-        duration = custom_duration or template[0]
         pace = template[1]
         intensity = template[2]
         tss_per_km = template[3]
-        
-        distance = round(duration / pace, 1)
+
+        if custom_distance is not None:
+            distance = round(custom_distance, 1)
+            duration = round(distance * pace)
+        else:
+            duration = custom_duration or template[0]
+            distance = round(duration / pace, 1)
         tss = round(distance * tss_per_km)
         
         # Build details string
@@ -425,9 +421,31 @@ async def generate_cycle_week(
         # Keep intensity, reduce volume
         week_structure = [(d, "Recovery" if t == "Endurance" else t) for d, t in week_structure]
     
-    # Build all sessions
-    sessions = [build_session(day, session_type) for day, session_type in week_structure]
-    
+    # Build all sessions — VOLUME-DRIVEN so the sum matches target_km exactly.
+    # The long run takes its bounded distance; the remaining volume is split
+    # across the work sessions weighted by session type.
+    has_long_run = any(t == "Long run" for _, t in week_structure)
+    long_total = min(target_long_run, target_km) if has_long_run else 0
+    remaining = max(0.0, target_km - long_total)
+
+    # Relative volume weight per session type
+    type_weights = {"Recovery": 0.8, "Endurance": 1.3, "Tempo": 1.0, "Threshold": 0.9, "Fartlek": 1.0}
+    work_entries = [(d, t) for d, t in week_structure if t not in ("Rest", "Long run")]
+    weight_sum = sum(type_weights.get(t, 1.0) for _, t in work_entries) or 1.0
+
+    distances = {}
+    for d, t in work_entries:
+        distances[(d, t)] = remaining * (type_weights.get(t, 1.0) / weight_sum)
+
+    sessions = []
+    for day, session_type in week_structure:
+        if session_type == "Long run":
+            sessions.append(build_session(day, session_type, custom_distance=long_total))
+        elif session_type == "Rest":
+            sessions.append(build_session(day, session_type))
+        else:
+            sessions.append(build_session(day, session_type, custom_distance=distances.get((day, session_type))))
+
     # Calculate totals
     total_km = round(sum(s["distance_km"] for s in sessions), 1)
     total_tss = sum(s["estimated_tss"] for s in sessions)

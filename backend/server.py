@@ -54,6 +54,7 @@ from rag_engine import (
 # Import training engine for periodization
 from training_engine import (
     GOAL_CONFIG,
+    compute_target_km,
     compute_week_number,
     determine_phase,
     get_phase_description,
@@ -4000,7 +4001,9 @@ async def get_full_training_cycle(
 
     goal = cycle.get("goal", "SEMI")
     config = GOAL_CONFIG.get(goal, GOAL_CONFIG["SEMI"])
-    total_weeks = config["cycle_weeks"]
+    # Use readiness-adjusted cycle length stored by the detailed plan engine so
+    # phases (and therefore target_km per week) match the detailed plan exactly.
+    total_weeks = cycle.get("adjusted_weeks") or config["cycle_weeks"]
 
     # Retrieve session preferences
     prefs = await db.training_prefs.find_one({"user_id": user["id"]})
@@ -4017,11 +4020,16 @@ async def get_full_training_cycle(
     twenty_eight_days_ago = today - timedelta(days=28)
     
     workouts_28 = await db.workouts.find({
+        "$or": [
+            {"user_id": user["id"]},
+            {"user_id": None},
+            {"user_id": {"$exists": False}}
+        ],
         "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).to_list(200)
+    }).to_list(300)
     
     km_28 = sum(w.get("distance_km", 0) for w in workouts_28)
-    base_weekly_km = km_28 / 4 if km_28 > 0 else 25  # Base weekly volume
+    base_weekly_km = km_28 / 4 if km_28 > 0 else 25  # Base weekly volume (athlete's recent avg)
 
     # Generate overview of all weeks
     weeks_overview = []
@@ -4030,24 +4038,8 @@ async def get_full_training_cycle(
         phase = determine_phase(week_num, total_weeks)
         phase_info = get_phase_description(phase, lang)
         
-        # Target volume by phase and progression
-        progression_factor = 1 + (week_num / total_weeks) * 0.3  # +30% max over cycle
-        
-        if phase == "build":
-            volume_factor = 1.0 * progression_factor
-        elif phase == "deload":
-            volume_factor = 0.7  # -30% deload
-        elif phase == "intensification":
-            volume_factor = 1.1 * progression_factor
-        elif phase == "taper":
-            weeks_to_race = total_weeks - week_num
-            volume_factor = 0.6 - (0.1 * (2 - weeks_to_race))
-        elif phase == "race":
-            volume_factor = 0.3
-        else:
-            volume_factor = 1.0
-        
-        target_km = round(base_weekly_km * volume_factor)
+        # Target volume — SAME engine as the detailed week plan so cards match sessions
+        target_km = compute_target_km(base_weekly_km, goal, phase)
         
         # Session type keys (frontend translates via i18n trainingPlan.sessionType.*)
         if phase == "build":

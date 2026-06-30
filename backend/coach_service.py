@@ -27,6 +27,8 @@ from llm_coach import (
 )
 from training_engine import (
     GOAL_CONFIG,
+    VOLUME_GOAL_CONFIG,
+    compute_target_km,
     compute_week_number,
     determine_phase,
     build_training_context,
@@ -639,36 +641,25 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     return result
 
 
+# ============================================================
+# WEEKLY VOLUME — imported from training_engine (single source of truth)
+# ============================================================
+
+
 def _deterministic_plan(context: dict, phase: str, target_load: int, goal: str, sessions_per_week: int = None, personalized_paces: dict = None) -> dict:
     """Generates a deterministic fallback plan with personalized VMA-based paces."""
 
     # Athlete's current volume (based on last 4 weeks)
     current_weekly_km = context.get("weekly_km", 30)
 
-    # RECOMMENDED minimum volumes (based on real training data)
-    goal_configs = {
-        "5K": {"min": 15, "max": 45, "sessions": 3, "long_min": 8, "long_max": 10},
-        "10K": {"min": 20, "max": 60, "sessions": 3, "long_min": 10, "long_max": 14},
-        "SEMI": {"min": 30, "max": 80, "sessions": 3, "long_min": 16, "long_max": 18},
-        "MARATHON": {"min": 40, "max": 120, "sessions": 4, "long_min": 28, "long_max": 32},
-        "ULTRA": {"min": 50, "max": 150, "sessions": 5, "long_min": 35, "long_max": 45},
-    }
-    
-    config = goal_configs.get(goal, goal_configs["SEMI"])
+    config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
 
     # Use specified number of sessions or default
     num_sessions = sessions_per_week if sessions_per_week in [3, 4, 5, 6] else config["sessions"]
     num_rest_days = 7 - num_sessions
 
-    # Minimum volume = max(current volume, recommended minimum)
-    volume_min = max(current_weekly_km, config["min"])
-
-    # Target volume calculation: +7% progressive
-    target_km = max(volume_min, min(config["max"], round(current_weekly_km * 1.07)))
-
-    # Phase multiplier
-    phase_multipliers = {"build": 1.0, "deload": 0.7, "intensification": 1.05, "taper": 0.5, "race": 0.3}
-    target_km = round(target_km * phase_multipliers.get(phase, 1.0))
+    # Target weekly volume — single source of truth shared with cycle overview
+    target_km = compute_target_km(current_weekly_km, goal, phase)
 
     # Proportional long run
     long_ratio = (target_km - config["min"]) / (config["max"] - config["min"]) if config["max"] > config["min"] else 0.5

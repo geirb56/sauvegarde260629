@@ -57,6 +57,51 @@ GOAL_CONFIG = {
     }
 }
 
+
+# ============================================================
+# WEEKLY VOLUME — SINGLE SOURCE OF TRUTH
+# Shared by the detailed week plan (llm_coach.generate_cycle_week /
+# coach_service._deterministic_plan) AND the full-cycle overview
+# (server.py /training/full-cycle) so the displayed target_km always
+# matches the sum of the generated sessions.
+# ============================================================
+
+# Recommended weekly volume bounds (km/week) and long-run bounds per goal
+VOLUME_GOAL_CONFIG = {
+    "5K": {"min": 15, "max": 45, "sessions": 3, "long_min": 8, "long_max": 10},
+    "10K": {"min": 20, "max": 60, "sessions": 3, "long_min": 10, "long_max": 14},
+    "SEMI": {"min": 30, "max": 80, "sessions": 4, "long_min": 16, "long_max": 18},
+    "MARATHON": {"min": 40, "max": 120, "sessions": 4, "long_min": 28, "long_max": 32},
+    "ULTRA": {"min": 50, "max": 150, "sessions": 5, "long_min": 35, "long_max": 45},
+}
+
+# Volume modulation per training phase
+PHASE_VOLUME_MULTIPLIERS = {"build": 1.0, "deload": 0.7, "intensification": 1.05, "taper": 0.5, "race": 0.3}
+
+
+def compute_target_km(current_weekly_km: float, goal: str, phase: str) -> int:
+    """Single source of truth for weekly target volume (km).
+
+    current_weekly_km: athlete's recent average weekly volume (km_28 / 4)
+    goal: 5K / 10K / SEMI / MARATHON / ULTRA
+    phase: build / deload / intensification / taper / race
+    """
+    config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
+    volume_min = max(current_weekly_km, config["min"])
+    base = max(volume_min, min(config["max"], round(current_weekly_km * 1.07)))
+    return round(base * PHASE_VOLUME_MULTIPLIERS.get(phase, 1.0))
+
+
+def compute_long_run_km(target_km: float, goal: str) -> int:
+    """Long-run distance derived from target volume, bounded by goal limits."""
+    config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
+    span = config["max"] - config["min"]
+    ratio = (target_km - config["min"]) / span if span > 0 else 0.5
+    ratio = max(0.0, min(1.0, ratio))
+    long_run = round(config["long_min"] + ratio * (config["long_max"] - config["long_min"]))
+    return max(config["long_min"], min(config["long_max"], long_run))
+
+
 # Safety thresholds
 ACWR_SAFE_MIN = 0.8
 ACWR_SAFE_MAX = 1.3
@@ -458,6 +503,10 @@ def generate_week_recommendation(
 
 __all__ = [
     "GOAL_CONFIG",
+    "VOLUME_GOAL_CONFIG",
+    "PHASE_VOLUME_MULTIPLIERS",
+    "compute_target_km",
+    "compute_long_run_km",
     "compute_week_number",
     "compute_acwr",
     "compute_tsb",
