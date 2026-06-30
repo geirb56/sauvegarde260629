@@ -134,6 +134,7 @@ Deleted the `get_mock_workouts()` function and removed its fallback from all 8 e
 - ✅ Multilingual support (EN/FR/ES)
 - ✅ Dashboard layout reordering: Recommandation → Métriques → Séance du jour → Séances récentes
 - ✅ [2026-06-30] Fixed Training Plan mileage mismatch: unified weekly-volume logic into a single source of truth `compute_target_km` / `compute_long_run_km` in training_engine.py, used by /training/full-cycle (server.py), generate_cycle_week (llm_coach.py, now VOLUME-DRIVEN sessions) and _deterministic_plan (coach_service.py). Cycle cards now match the sum of detailed sessions exactly.
+- ✅ [2026-06-30] Fixed wrong km cumulative on Training page: /training/metrics was not user-scoped and summed other users' mock workouts (garmin-mock-p2user-*). Added user_id filter → THIS WEEK / 28D LOAD / ACWR now reflect only the current user's data.
 
 ## P1 (High Priority) - Backlog
 - Real Terra API integration (requires user API key)

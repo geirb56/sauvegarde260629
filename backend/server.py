@@ -3405,12 +3405,21 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     seven_days_ago = today - timedelta(days=7)
     twenty_eight_days_ago = today - timedelta(days=28)
 
-    # Retrieve activities
+    # Retrieve activities (user-scoped to avoid mixing other users' data)
+    user_filter = {
+        "$or": [
+            {"user_id": user["id"]},
+            {"user_id": None},
+            {"user_id": {"$exists": False}}
+        ]
+    }
     activities_7 = await db.workouts.find({
+        **user_filter,
         "date": {"$gte": seven_days_ago.isoformat()}
     }).to_list(100)
 
     activities_28 = await db.workouts.find({
+        **user_filter,
         "date": {"$gte": twenty_eight_days_ago.isoformat()}
     }).to_list(300)
     
