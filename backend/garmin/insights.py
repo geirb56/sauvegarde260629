@@ -193,16 +193,33 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
     fatigue_physio = max(0.0, fatigue_physio)
     fatigue_ratio = fatigue_physio / training_load
 
-    # --- Recommendation ---
-    if fatigue_ratio > 1.5:
-        recommendation, rec_emoji, rec_color = "REST", "🔴", "red"
-        nw_label, nw_icon = "Rest Day", "rest"
-    elif fatigue_ratio > 1.2:
+    # --- Run Readiness (SINGLE SOURCE OF TRUTH, computed backend-side) ---
+    # Score 0-100. Two penalties subtracted from a fresh baseline of 100:
+    #  1. Physiological fatigue (RHR/HRV/sleep). Works WITH OR WITHOUT HRV
+    #     because fatigue_physio already reweights when HRV is unavailable
+    #     (many Garmin devices do not record HRV).
+    #  2. ACWR load risk, penalised on BOTH sides of the optimal 0.8-1.3 zone:
+    #     overload (>1.3) penalised steeply, detraining (<0.8) penalised mildly.
+    physio_penalty = min(60.0, fatigue_physio * 6.0)
+    if acwr > 1.3:
+        acwr_penalty = min(60.0, (acwr - 1.3) * 130.0)
+    elif acwr < 0.8:
+        acwr_penalty = min(30.0, (0.8 - acwr) * 60.0)
+    else:
+        acwr_penalty = 0.0
+    run_readiness = int(round(max(5.0, min(100.0, 100.0 - physio_penalty - acwr_penalty))))
+
+    # --- Recommendation derived from readiness (number & badge always agree) ---
+    if run_readiness >= 75:
+        recommendation, rec_emoji, rec_color = "RUN HARD", "🟢", "green"
+        nw_label, nw_icon = "Intervals – 6 x 800 m", "run"
+    elif run_readiness >= 55:
         recommendation, rec_emoji, rec_color = "EASY RUN", "🟡", "yellow"
         nw_label, nw_icon = "Easy Run – 45 min Z2", "run"
     else:
-        recommendation, rec_emoji, rec_color = "RUN HARD", "🟢", "green"
-        nw_label, nw_icon = "Intervals – 6 x 800 m", "run"
+        recommendation, rec_emoji, rec_color = "REST", "🔴", "red"
+        nw_label, nw_icon = "Rest Day", "rest"
+    readiness_status = rec_color
 
     # --- Statuses ---
     hrv_status = "green"
@@ -278,6 +295,8 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
             "fatigue_physio": round(fatigue_physio, 2),
             "fatigue_ratio": round(fatigue_ratio, 2),
             "fatigue_status": fatigue_status,
+            "run_readiness": run_readiness,
+            "run_readiness_status": readiness_status,
         },
         "history": history,
     }

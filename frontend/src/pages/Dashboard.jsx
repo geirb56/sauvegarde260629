@@ -552,9 +552,8 @@ export default function Dashboard() {
             const recStyle = REC_STYLES[cardioData?.recommendation_color] || REC_STYLES.green;
             const history = cardioData?.history || [];
             
-            // Calculate Run Readiness Score from fatigue_ratio
-            const fatigueRatio = m.fatigue_ratio ?? 1.0;
-            const runReadinessScore = Math.max(20, Math.min(100, Math.round(120 - (fatigueRatio * 25))));
+            // Run Readiness Score — single source of truth from backend (Garmin insights)
+            const runReadinessScore = m.run_readiness ?? 100;
             
             return (
               <>
