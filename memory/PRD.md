@@ -96,6 +96,9 @@ A fresh production container will NOT have the gccli binary or the token. Before
 ### get_mock_workouts() fully removed (DONE)
 Deleted the `get_mock_workouts()` function and removed its fallback from all 8 endpoints (GET /api/workouts, GET /api/workouts/{id}, dashboard insight, /coach/guidance, /coach/digest, /coach/workout-analysis/{id}, /coach/detailed-analysis/{id}, /coach chat). The analysis endpoints query the global workouts collection (now filled with real Garmin activities) and the local engines handle empty lists. Verified (14/14 backend tests): no 500s, empty-user → [] , bogus workout id → 404, all coach/dashboard endpoints 200 with real Garmin data, cardio-coach still source=garmin. Remaining mocks: `_CARDIO_COACH_MOCK_DATA` (cardio-coach fallback only when Garmin not connected) and `DEMO_MODE` (Stripe subscription bypass).
 
+### No-data state when Garmin not connected (DONE — replaced last mock)
+`_CARDIO_COACH_MOCK_DATA` deleted. When no wearable is connected, `GET /api/cardio-coach` now returns an explicit no-data payload `{mock:false, no_data:true, connected:false, metrics:null, message:"Connect your Garmin…"}` instead of fabricated data. The Dashboard renders a "No data yet / Connect Garmin" panel (links to /onboarding) instead of fake metrics. Added i18n keys (en/fr/es): dashboard.noData, connectGarmin, connectGarminPrompt. Verified by frontend testing agent: PART 1 disconnected → no-data panel with NO mock metrics; PART 2 connect via onboarding → real data (RHR 44, ACWR 1.57) appears. Only remaining mock: DEMO_MODE (Stripe subscription bypass).
+
 ## 2025-04-12
 - **Dashboard layout reordered**: Components now appear in user-requested order: 1) Recommandation du jour (score + RUN HARD/EASY/REST), 2) Métriques du jour (6 widgets), 3) Séance du jour, 4) Séances récentes. Animation delays updated accordingly.
 
