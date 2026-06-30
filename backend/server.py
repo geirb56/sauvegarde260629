@@ -2721,48 +2721,21 @@ async def get_terra_daily_metrics(user_id: str = "default"):
 
 # ========== CARDIO COACH RUNNING SCREEN ==========
 
-# Mock data returned when Terra is not connected (graceful degradation).
-_CARDIO_COACH_MOCK_DATA = {
-    "mock": True,
-    "recommendation": "RUN HARD",
-    "recommendation_emoji": "🟢",
-    "recommendation_color": "green",
-    "next_workout": {"label": "Intervals – 6 x 800 m", "icon": "run"},
-    "metrics": {
-        "hrv_today": 58.0,
-        "hrv_baseline": 55.0,
-        "hrv_delta": -3.0,
-        "hrv_status": "green",
-        "rhr_today": 48.0,
-        "rhr_baseline": 50.0,
-        "rhr_delta": -2.0,
-        "rhr_status": "green",
-        "sleep_hours": 7.5,
-        "sleep_efficiency": 0.88,
-        "sleep_score": 0.74,
-        "sleep_status": "yellow",
-        "training_load": 1.05,
-        "training_load_status": "green",
-        "fatigue_physio": 0.0,
-        "fatigue_ratio": 0.70,
-        "fatigue_status": "green",
-    },
-    "reasons": [
-        "HRV deviation −3.0 ms vs baseline → today above baseline (good recovery)",
-        "RHR −2.0 bpm vs baseline → rested",
-        "Sleep 7.5 h at 88% efficiency",
-        "Training load (ACWR) 1.05 → optimal",
-        "Fatigue Ratio 0.70 → ready to perform",
-    ],
-    "history": [
-        {"day": "Mon", "hrv": 52, "training_load": 1.1, "fatigue_ratio": 0.85},
-        {"day": "Tue", "hrv": 55, "training_load": 1.05, "fatigue_ratio": 0.80},
-        {"day": "Wed", "hrv": 50, "training_load": 1.2, "fatigue_ratio": 1.10},
-        {"day": "Thu", "hrv": 48, "training_load": 1.3, "fatigue_ratio": 1.30},
-        {"day": "Fri", "hrv": 54, "training_load": 1.0, "fatigue_ratio": 0.90},
-        {"day": "Sat", "hrv": 57, "training_load": 0.9, "fatigue_ratio": 0.75},
-        {"day": "Sun", "hrv": 58, "training_load": 1.05, "fatigue_ratio": 0.70},
-    ],
+# Returned when no wearable (Garmin/Terra) is connected: explicit "no data"
+# state so the UI shows an empty/connect prompt instead of fabricated data.
+_CARDIO_COACH_NO_DATA = {
+    "mock": False,
+    "no_data": True,
+    "connected": False,
+    "source": None,
+    "message": "Connect your Garmin to see your readiness and daily metrics.",
+    "recommendation": None,
+    "recommendation_emoji": None,
+    "recommendation_color": "gray",
+    "next_workout": None,
+    "reasons": [],
+    "metrics": None,
+    "history": [],
 }
 
 
@@ -2798,7 +2771,7 @@ async def get_cardio_coach(user_id: str = "default"):
     # ----------------------------------------------------------------
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
-        return _CARDIO_COACH_MOCK_DATA
+        return _CARDIO_COACH_NO_DATA
 
     # ----------------------------------------------------------------
     # Daily metrics (sync today's if not yet stored).
@@ -2957,9 +2930,9 @@ async def get_cardio_coach(user_id: str = "default"):
             "fatigue_ratio": round(doc_fatigue_ratio, 2),
         })
 
-    # Pad history with mock-style entries if fewer than 7 days of data.
+    # Leave history empty if fewer than 7 days of data (no mock padding).
     if not history:
-        history = _CARDIO_COACH_MOCK_DATA["history"]
+        history = []
 
     return {
         "mock": False,

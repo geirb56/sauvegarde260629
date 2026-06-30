@@ -523,6 +523,31 @@ export default function Dashboard() {
 
           {/* Decision card */}
           {(() => {
+            if (cardioData?.no_data || cardioData?.connected === false) {
+              return (
+                <div
+                  className="rounded-2xl p-6 flex flex-col items-center text-center gap-3"
+                  style={{ background: "var(--bg-elevated, #1a1a1f)", border: "1px solid var(--border, #2a2a30)" }}
+                  data-testid="cardio-no-data"
+                >
+                  <Activity size={28} style={{ color: "var(--text-tertiary)" }} />
+                  <p className="text-sm font-semibold" style={{ color: "var(--text-secondary)" }}>
+                    {t("dashboard.noData", "No data yet")}
+                  </p>
+                  <p className="text-xs max-w-xs" style={{ color: "var(--text-tertiary)" }}>
+                    {cardioData?.message || t("dashboard.connectGarminPrompt", "Connect your Garmin to see your readiness and daily metrics.")}
+                  </p>
+                  <Link
+                    to="/onboarding"
+                    className="mt-1 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider"
+                    style={{ background: "var(--accent-violet, #7c3aed)", color: "#fff" }}
+                    data-testid="cardio-connect-cta"
+                  >
+                    {t("dashboard.connectGarmin", "Connect Garmin")}
+                  </Link>
+                </div>
+              );
+            }
             const m = cardioData?.metrics || {};
             const recStyle = REC_STYLES[cardioData?.recommendation_color] || REC_STYLES.green;
             const history = cardioData?.history || [];
