@@ -603,220 +603,6 @@ def calculate_baseline_metrics(workouts: List[dict], current_workout: dict, days
     return baseline
 
 
-# ========== MOCK DATA FOR DEMO ==========
-
-def get_mock_workouts():
-    """Generate mock workout data for demonstration with recent dates"""
-    from datetime import datetime, timedelta, timezone
-    today = datetime.now(timezone.utc).date()
-    
-    return [
-        {
-            "id": "w001",
-            "type": "run",
-            "name": "Morning Easy Run",
-            "date": (today - timedelta(days=0)).isoformat(),
-            "duration_minutes": 45,
-            "distance_km": 8.2,
-            "avg_heart_rate": 142,
-            "max_heart_rate": 158,
-            "avg_pace_min_km": 5.49,
-            "elevation_gain_m": 85,
-            "calories": 520,
-            "effort_zone_distribution": {"z1": 15, "z2": 55, "z3": 25, "z4": 5, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w002",
-            "type": "cycle",
-            "name": "Tempo Ride",
-            "date": (today - timedelta(days=1)).isoformat(),
-            "duration_minutes": 90,
-            "distance_km": 42.5,
-            "avg_heart_rate": 155,
-            "max_heart_rate": 172,
-            "avg_speed_kmh": 28.3,
-            "elevation_gain_m": 320,
-            "calories": 1180,
-            "effort_zone_distribution": {"z1": 5, "z2": 25, "z3": 45, "z4": 20, "z5": 5},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w003",
-            "type": "run",
-            "name": "Interval Session",
-            "date": (today - timedelta(days=2)).isoformat(),
-            "duration_minutes": 52,
-            "distance_km": 10.1,
-            "avg_heart_rate": 162,
-            "max_heart_rate": 185,
-            "avg_pace_min_km": 5.15,
-            "elevation_gain_m": 45,
-            "calories": 680,
-            "effort_zone_distribution": {"z1": 10, "z2": 20, "z3": 25, "z4": 30, "z5": 15},
-            "notes": "5x1000m @ threshold",
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w004",
-            "type": "run",
-            "name": "Long Run",
-            "date": (today - timedelta(days=3)).isoformat(),
-            "duration_minutes": 105,
-            "distance_km": 18.5,
-            "avg_heart_rate": 138,
-            "max_heart_rate": 155,
-            "avg_pace_min_km": 5.68,
-            "elevation_gain_m": 180,
-            "calories": 1350,
-            "effort_zone_distribution": {"z1": 20, "z2": 65, "z3": 15, "z4": 0, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w005",
-            "type": "cycle",
-            "name": "Recovery Spin",
-            "date": (today - timedelta(days=4)).isoformat(),
-            "duration_minutes": 45,
-            "distance_km": 18.0,
-            "avg_heart_rate": 118,
-            "max_heart_rate": 132,
-            "avg_speed_kmh": 24.0,
-            "elevation_gain_m": 50,
-            "calories": 380,
-            "effort_zone_distribution": {"z1": 60, "z2": 35, "z3": 5, "z4": 0, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w006",
-            "type": "run",
-            "name": "Hill Repeats",
-            "date": (today - timedelta(days=5)).isoformat(),
-            "duration_minutes": 48,
-            "distance_km": 8.8,
-            "avg_heart_rate": 158,
-            "max_heart_rate": 178,
-            "avg_pace_min_km": 5.45,
-            "elevation_gain_m": 280,
-            "calories": 620,
-            "effort_zone_distribution": {"z1": 10, "z2": 25, "z3": 30, "z4": 25, "z5": 10},
-            "notes": "8x200m hill sprints",
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w007",
-            "type": "cycle",
-            "name": "Endurance Base",
-            "date": (today - timedelta(days=6)).isoformat(),
-            "duration_minutes": 120,
-            "distance_km": 55.0,
-            "avg_heart_rate": 135,
-            "max_heart_rate": 152,
-            "avg_speed_kmh": 27.5,
-            "elevation_gain_m": 420,
-            "calories": 1520,
-            "effort_zone_distribution": {"z1": 15, "z2": 60, "z3": 20, "z4": 5, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        # Baseline week (days 7-13)
-        {
-            "id": "w008",
-            "type": "run",
-            "name": "Recovery Run",
-            "date": (today - timedelta(days=8)).isoformat(),
-            "duration_minutes": 35,
-            "distance_km": 6.0,
-            "avg_heart_rate": 135,
-            "max_heart_rate": 148,
-            "avg_pace_min_km": 5.83,
-            "elevation_gain_m": 40,
-            "calories": 380,
-            "effort_zone_distribution": {"z1": 25, "z2": 60, "z3": 15, "z4": 0, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w009",
-            "type": "cycle",
-            "name": "Steady Ride",
-            "date": (today - timedelta(days=9)).isoformat(),
-            "duration_minutes": 75,
-            "distance_km": 35.0,
-            "avg_heart_rate": 140,
-            "max_heart_rate": 158,
-            "avg_speed_kmh": 28.0,
-            "elevation_gain_m": 250,
-            "calories": 950,
-            "effort_zone_distribution": {"z1": 10, "z2": 50, "z3": 30, "z4": 10, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w010",
-            "type": "run",
-            "name": "Tempo Run",
-            "date": (today - timedelta(days=10)).isoformat(),
-            "duration_minutes": 50,
-            "distance_km": 10.0,
-            "avg_heart_rate": 155,
-            "max_heart_rate": 170,
-            "avg_pace_min_km": 5.0,
-            "elevation_gain_m": 60,
-            "calories": 620,
-            "effort_zone_distribution": {"z1": 5, "z2": 30, "z3": 45, "z4": 15, "z5": 5},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w011",
-            "type": "run",
-            "name": "Easy Run",
-            "date": (today - timedelta(days=12)).isoformat(),
-            "duration_minutes": 40,
-            "distance_km": 7.5,
-            "avg_heart_rate": 140,
-            "max_heart_rate": 155,
-            "avg_pace_min_km": 5.33,
-            "elevation_gain_m": 50,
-            "calories": 450,
-            "effort_zone_distribution": {"z1": 20, "z2": 55, "z3": 20, "z4": 5, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        },
-        {
-            "id": "w012",
-            "type": "cycle",
-            "name": "Long Ride",
-            "date": (today - timedelta(days=13)).isoformat(),
-            "duration_minutes": 150,
-            "distance_km": 70.0,
-            "avg_heart_rate": 132,
-            "max_heart_rate": 155,
-            "avg_speed_kmh": 28.0,
-            "elevation_gain_m": 550,
-            "calories": 1850,
-            "effort_zone_distribution": {"z1": 20, "z2": 60, "z3": 15, "z4": 5, "z5": 0},
-            "notes": None,
-            "data_source": "manual",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-    ]
 
 
 # ========== ROUTES ==========
@@ -834,8 +620,6 @@ async def get_workouts(user_id: str = "default"):
         {"$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}]}, 
         {"_id": 0}
     ).sort("date", -1).to_list(200)
-    if not workouts:
-        workouts = get_mock_workouts()
     return workouts
 
 
@@ -847,10 +631,6 @@ async def get_workout(workout_id: str, user_id: str = "default"):
         {"id": workout_id, "$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}]}, 
         {"_id": 0}
     )
-    if not workout:
-        # Check mock data
-        mock = get_mock_workouts()
-        workout = next((w for w in mock if w["id"] == workout_id), None)
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
     return workout
@@ -1494,9 +1274,6 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
     
     # Get workouts
     all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(200)
-    if not all_workouts:
-        all_workouts = get_mock_workouts()
-    
     # Calculate stats
     week_stats = calculate_week_stats(all_workouts)
     month_stats = calculate_month_stats(all_workouts)
@@ -1961,8 +1738,6 @@ async def get_adaptive_guidance(request: GuidanceRequest):
     
     # Get recent workouts (last 14 days)
     all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(100)
-    if not all_workouts:
-        all_workouts = get_mock_workouts()
     
     # Calculate training summary
     today = datetime.now(timezone.utc).date()
@@ -2199,8 +1974,6 @@ async def get_weekly_review(user_id: str = "default", language: str = "en"):
     
     # Get all workouts
     all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(200)
-    if not all_workouts:
-        all_workouts = get_mock_workouts()
     
     # Calculate date ranges
     today = datetime.now(timezone.utc).date()
@@ -2529,8 +2302,6 @@ async def get_mobile_workout_analysis(workout_id: str, language: str = "en", use
     
     # Get all workouts
     all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(100)
-    if not all_workouts:
-        all_workouts = get_mock_workouts()
     
     # Find the workout
     workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
@@ -2611,8 +2382,6 @@ async def get_detailed_analysis(workout_id: str, language: str = "en", user_id: 
     
     # Get all workouts
     all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(100)
-    if not all_workouts:
-        all_workouts = get_mock_workouts()
     
     # Find the workout
     workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
@@ -5004,8 +4773,6 @@ async def send_chat_message(request: ChatRequest):
     
     # Get user's recent workouts for context
     workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(50)
-    if not workouts:
-        workouts = get_mock_workouts()
     
     # Get user goal
     user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
