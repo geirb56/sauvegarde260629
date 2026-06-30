@@ -135,7 +135,7 @@ Deleted the `get_mock_workouts()` function and removed its fallback from all 8 e
 - ✅ Dashboard layout reordering: Recommandation → Métriques → Séance du jour → Séances récentes
 - ✅ [2026-06-30] Fixed Training Plan mileage mismatch: unified weekly-volume logic into a single source of truth `compute_target_km` / `compute_long_run_km` in training_engine.py, used by /training/full-cycle (server.py), generate_cycle_week (llm_coach.py, now VOLUME-DRIVEN sessions) and _deterministic_plan (coach_service.py). Cycle cards now match the sum of detailed sessions exactly.
 - ✅ [2026-06-30] Aligned ACWR & TSB across Dashboard and Training (single source of truth `compute_load_metrics` in garmin/insights.py, duration-based on garmin_activities). Both show ACWR 1.57.
-- ✅ [2026-06-30] Made Run Readiness coherent: now computed backend-side (garmin/insights.py) from physiological fatigue (RHR/HRV/sleep, graceful without HRV) + ACWR risk penalised on BOTH sides of the 0.8-1.3 optimal zone. Recommendation badge is derived from the readiness score so number & badge always agree (e.g. ACWR 1.57 → readiness 65 → EASY RUN, instead of the old 100/RUN HARD contradiction). Frontend reads `metrics.run_readiness` directly.
+- ✅ [2026-06-30] Made "Today's Metrics" coherent: removed duplicate "Current Form" widget (contradicted Run Readiness); week stats now use a rolling 7-day window (matches /training/metrics THIS WEEK = 31.7 km); /dashboard/insight is now user-scoped. Fixed latent "ok"/"moderate" status label mismatch (widget removed).
 
 ## P1 (High Priority) - Backlog
 - Real Terra API integration (requires user API key)

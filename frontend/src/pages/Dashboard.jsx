@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
 import {
-  TrendingUp,
   ChevronRight,
   Bike,
   Zap,
@@ -476,7 +475,6 @@ export default function Dashboard() {
     );
   }
 
-  const recovery = insight?.recovery_score;
   const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
   const monthStats = insight?.month || { volume_km: 0 };
   
@@ -617,14 +615,6 @@ export default function Dashboard() {
                     style={{ scrollbarWidth: "none" }}
                     data-testid="metrics-scroll"
                   >
-                    <MetricWidget
-                      icon={TrendingUp}
-                      label={t("dashboard.currentForm")}
-                      value={recovery?.score || 75}
-                      unit="pts"
-                      status={recovery?.score >= 75 ? "green" : recovery?.score >= 50 ? "yellow" : "red"}
-                      detail={recovery?.status === "ready" ? t("dashboard.formReady") || "Prêt" : recovery?.status === "ok" ? t("dashboard.formOk") || "OK" : t("dashboard.formTired") || "Fatigué"}
-                    />
                     <MetricWidget
                       icon={Heart}
                       label={t("dashboard.hrvDeviation")}

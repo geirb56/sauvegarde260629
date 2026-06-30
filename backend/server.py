@@ -1178,13 +1178,13 @@ async def delete_user_goal(user_id: str = "default"):
 def calculate_week_stats(workouts: list) -> dict:
     """Calculate current week statistics"""
     today = datetime.now(timezone.utc).date()
-    week_start = today - timedelta(days=today.weekday())  # Monday
-    
+    # Rolling 7-day window (matches /training/metrics "THIS WEEK" and the ACWR
+    # acute window) so the Dashboard "this week" stats never contradict it.
     week_workouts = []
     for w in workouts:
         try:
             w_date = datetime.fromisoformat(w.get("date", "").replace("Z", "+00:00").split("T")[0]).date()
-            if week_start <= w_date <= today:
+            if 0 <= (today - w_date).days < 7:
                 week_workouts.append(w)
         except (ValueError, TypeError):
             continue
@@ -1273,8 +1273,14 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
             logger.info(f"Dashboard insight cache hit for {cache_key}")
             return cached_data
     
-    # Get workouts
-    all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(200)
+    # Get workouts (user-scoped to avoid mixing other users' data)
+    all_workouts = await db.workouts.find({
+        "$or": [
+            {"user_id": user_id},
+            {"user_id": None},
+            {"user_id": {"$exists": False}}
+        ]
+    }, {"_id": 0}).sort("date", -1).to_list(200)
     # Calculate stats
     week_stats = calculate_week_stats(all_workouts)
     month_stats = calculate_month_stats(all_workouts)
