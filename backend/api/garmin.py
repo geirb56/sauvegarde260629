@@ -12,12 +12,25 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from garmin import service as garmin_service
 from jobs.queue import enqueue_sync
 
+import logging
+logger = logging.getLogger(__name__)
+
 garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
+
+
+async def _safe_enqueue(user_id: str):
+    """Enqueue a sync, tolerating a transient Redis outage."""
+    try:
+        return await enqueue_sync(user_id), None
+    except Exception as exc:  # Redis down / connection error
+        logger.error("[garmin] enqueue failed for user=%s: %s", user_id, exc)
+        return None, exc
 
 
 class GarminConnectRequest(BaseModel):
@@ -37,14 +50,21 @@ async def connect_garmin(request: Request, body: Optional[GarminConnectRequest] 
     result = await garmin_service.connect(db, user_id, simulate_mfa=simulate_mfa)
     if result.get("status") == "connected":
         # Kick off the first data sync in the background (never blocks the API).
-        await enqueue_sync(user_id)
+        # Redis outage must not fail the connect itself.
+        await _safe_enqueue(user_id)
     return result
 
 
 @garmin_router.post("/sync")
 async def sync_garmin(request: Request, user_id: str = "default"):
     """Non-blocking: enqueue a Garmin sync job and return immediately."""
-    return await enqueue_sync(user_id)
+    res, err = await _safe_enqueue(user_id)
+    if err is not None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": "sync service temporarily unavailable, retry shortly"},
+        )
+    return res
 
 
 @garmin_router.get("/status")
