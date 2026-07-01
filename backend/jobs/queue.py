@@ -8,14 +8,22 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+import uuid
 
 from .redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
-# Single FIFO queue (LPUSH to enqueue, BRPOP to consume).
+# Single FIFO queue (LPUSH to enqueue, BLMOVE to claim into processing).
 QUEUE_KEY = "cardiocoach:garmin:queue"
+# Reliable-queue in-flight list: a job lives here from claim until ACK.
+PROCESSING_KEY = "cardiocoach:garmin:processing"
+# Hash job_id -> claimed_at (epoch); used by the watchdog to detect orphans.
+CLAIMS_KEY = "cardiocoach:garmin:claims"
+# A job stuck in processing longer than this (s) is considered orphaned.
+ORPHAN_TIMEOUT = int(os.environ.get("SYNC_ORPHAN_TIMEOUT", "120"))
 
 # Job types
 JOB_SYNC_USER = "SYNC_USER"          # full sync: activities + daily health metrics
@@ -28,9 +36,10 @@ PENDING_PREFIX = "sync_pending:"  # dedupe flag: a job is queued/running for use
 PENDING_TTL = 300                # seconds
 
 
-async def _push(job_type: str, user_id: str, attempts: int = 0) -> None:
+async def _push(job_type: str, user_id: str, attempts: int = 0, job_id: str = None) -> None:
     r = get_redis()
     payload = json.dumps({
+        "id": job_id or uuid.uuid4().hex,
         "type": job_type,
         "user_id": user_id,
         "attempts": attempts,
