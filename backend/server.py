@@ -2753,10 +2753,13 @@ _CARDIO_COACH_NO_DATA = {
 async def get_cardio_coach(user_id: str = "default"):
     """Return the full CardioCoach running-screen payload.
 
-    Computes physiological fatigue metrics from Terra data and determines
-    today's training recommendation (RUN HARD / EASY RUN / REST).
+    Data source: 100% real Garmin (gccli). Resting HR + sleep come from gccli;
+    training load / ACWR / fatigue ratio / readiness are computed from the real
+    synced activities.
 
-    Falls back to embedded mock data when no Terra token is configured.
+    Terra is implemented for POSSIBLE FUTURE USE but is NOT connected: when no
+    Terra token exists (current state), the endpoint returns a NO_DATA payload
+    (never mock data).
     """
     today = datetime.now(timezone.utc).date()
     today_iso = today.isoformat()
@@ -2777,7 +2780,7 @@ async def get_cardio_coach(user_id: str = "default"):
             logger.warning(f"[cardio-coach] Garmin computation failed, falling back: {e}")
 
     # ----------------------------------------------------------------
-    # Load Terra token — fall back to mock data when absent.
+    # Terra fallback — DORMANT (future use). No token = no data (no mock).
     # ----------------------------------------------------------------
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
