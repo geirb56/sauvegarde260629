@@ -69,3 +69,92 @@ async def enqueue_sync(user_id: str) -> dict:
 async def enqueue_activity_sync(user_id: str) -> dict:
     """Queue an activities-focused sync."""
     return await _enqueue_deduped(JOB_SYNC_ACTIVITY, user_id)
+
+
+# --------------------------------------------------------------------------- #
+# Reliable-queue primitives (at-least-once delivery).
+#
+# A job flows: QUEUE_KEY --BLMOVE--> PROCESSING_KEY --ACK(LREM)--> gone.
+# While in PROCESSING_KEY it is "in flight" and CLAIMS_KEY[id] holds the claim
+# time. If a worker dies before ACK, the job stays in PROCESSING_KEY and the
+# watchdog (recover_orphans) pushes it back to QUEUE_KEY once its claim is older
+# than ORPHAN_TIMEOUT. Nothing is lost on crash; jobs may run more than once,
+# which is safe because service.sync is idempotent (upserts).
+# --------------------------------------------------------------------------- #
+
+
+async def claim_job(timeout: int = 5):
+    """Atomically move the oldest job from the queue into the processing list.
+
+    LPUSH enqueues at the head, so the tail (RIGHT) holds the oldest job (FIFO).
+    Returns (raw, job) or None on timeout. Malformed payloads are discarded.
+    """
+    r = get_redis()
+    raw = await r.blmove(QUEUE_KEY, PROCESSING_KEY, timeout, src="RIGHT", dest="LEFT")
+    if not raw:
+        return None
+    try:
+        job = json.loads(raw)
+        job_id = job["id"]
+    except (ValueError, TypeError, KeyError):
+        logger.error("[queue] discarded malformed in-flight payload")
+        await r.lrem(PROCESSING_KEY, 1, raw)
+        return None
+    await r.hset(CLAIMS_KEY, job_id, time.time())
+    return raw, job
+
+
+async def ack_job(raw: str, job_id: str) -> None:
+    """Acknowledge a finished job: remove it from the processing list."""
+    r = get_redis()
+    async with r.pipeline(transaction=True) as pipe:
+        pipe.lrem(PROCESSING_KEY, 1, raw)
+        pipe.hdel(CLAIMS_KEY, job_id)
+        await pipe.execute()
+
+
+async def requeue_job(raw: str, job_id: str, new_payload: str = None) -> None:
+    """Remove an in-flight job and push it back to the queue for another attempt."""
+    r = get_redis()
+    async with r.pipeline(transaction=True) as pipe:
+        pipe.lrem(PROCESSING_KEY, 1, raw)
+        pipe.hdel(CLAIMS_KEY, job_id)
+        pipe.lpush(QUEUE_KEY, new_payload if new_payload is not None else raw)
+        await pipe.execute()
+
+
+async def recover_orphans() -> int:
+    """Requeue jobs stuck in the processing list past ORPHAN_TIMEOUT.
+
+    Called periodically by the worker watchdog. A missing claim record is
+    adopted (stamped now) rather than recovered immediately, to avoid racing a
+    worker that just claimed a job but has not yet recorded its claim time.
+    """
+    r = get_redis()
+    raws = await r.lrange(PROCESSING_KEY, 0, -1)
+    now = time.time()
+    recovered = 0
+    for raw in raws:
+        try:
+            job = json.loads(raw)
+            job_id = job["id"]
+        except (ValueError, TypeError, KeyError):
+            await r.lrem(PROCESSING_KEY, 1, raw)
+            continue
+        claimed_at = await r.hget(CLAIMS_KEY, job_id)
+        if claimed_at is None:
+            await r.hset(CLAIMS_KEY, job_id, now)
+            continue
+        if now - float(claimed_at) <= ORPHAN_TIMEOUT:
+            continue
+        # Orphan: move it back to the queue atomically. LREM returns 0 if another
+        # process already recovered/acked it, in which case we do nothing.
+        async with r.pipeline(transaction=True) as pipe:
+            pipe.lrem(PROCESSING_KEY, 1, raw)
+            pipe.hdel(CLAIMS_KEY, job_id)
+            results = await pipe.execute()
+        if results and results[0]:
+            await r.lpush(QUEUE_KEY, raw)
+            recovered += 1
+            logger.warning("[watchdog] recovered orphan job id=%s user=%s", job_id, job.get("user_id"))
+    return recovered

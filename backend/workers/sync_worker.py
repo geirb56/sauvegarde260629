@@ -2,8 +2,10 @@
 
 Runs independently from the FastAPI process (own event loop, own Mongo + Redis
 connections). Responsibilities:
-  - consume the job queue (BRPOP)
+  - consume the job queue via a reliable BLMOVE (queue -> processing list)
   - execute the real gccli sync via the existing service/provider layer
+  - ACK (remove from processing) only on success -> at-least-once delivery
+  - watchdog: requeue jobs orphaned by a crashed worker (kill -9)
   - throttle: max N concurrent syncs, one active sync per user (Redis lock)
   - retries (max SYNC_MAX_RETRIES) with backoff
   - per-job timeout (SYNC_JOB_TIMEOUT seconds)
@@ -37,6 +39,10 @@ from jobs.queue import (
     LOCK_PREFIX,
     LOCK_TTL,
     PENDING_PREFIX,
+    claim_job,
+    ack_job,
+    requeue_job,
+    recover_orphans,
 )
 from garmin import service as garmin_service
 from garmin.bootstrap import ensure_gccli_installed
@@ -50,6 +56,8 @@ logger = logging.getLogger("sync_worker")
 MAX_CONCURRENCY = int(os.environ.get("SYNC_MAX_CONCURRENCY", "5"))
 JOB_TIMEOUT = int(os.environ.get("SYNC_JOB_TIMEOUT", "60"))
 MAX_RETRIES = int(os.environ.get("SYNC_MAX_RETRIES", "3"))
+# Watchdog cadence: how often the worker scans the processing list for orphans.
+WATCHDOG_INTERVAL = int(os.environ.get("SYNC_WATCHDOG_INTERVAL", "30"))
 # Periodic auto-sync (0 = disabled). When >0, all connected users are enqueued
 # every N seconds, staggered to avoid a thundering herd at 1k users.
 SCHEDULE_INTERVAL = int(os.environ.get("SYNC_SCHEDULE_INTERVAL", "0"))
@@ -63,23 +71,18 @@ async def _run_job(db, job_type: str, user_id: str) -> dict:
     raise ValueError(f"unknown job type: {job_type}")
 
 
-async def process_job(db, redis, raw: str) -> None:
-    try:
-        job = json.loads(raw)
-    except (ValueError, TypeError):
-        logger.error("[worker] dropped malformed job payload")
-        return
-
+async def process_job(db, redis, raw: str, job: dict) -> None:
     job_type = job.get("type")
     user_id = job.get("user_id")
+    job_id = job.get("id")
     attempts = int(job.get("attempts", 0))
     lock_key = f"{LOCK_PREFIX}{user_id}"
 
-    # One active sync per user.
+    # One active sync per user. If busy, move the in-flight job back to the queue.
     if not await redis.set(lock_key, "1", nx=True, ex=LOCK_TTL):
         logger.info("[worker] user=%s already syncing -> requeue", user_id)
         await asyncio.sleep(1)
-        await redis.lpush(QUEUE_KEY, raw)  # back of the FIFO queue
+        await requeue_job(raw, job_id)
         return
 
     start = time.time()
@@ -93,6 +96,8 @@ async def process_job(db, redis, raw: str) -> None:
             result.get("synced_count"), result.get("metrics_count"),
         )
         await redis.delete(f"{PENDING_PREFIX}{user_id}")
+        # ACK only on success: this is the single point that removes the job.
+        await ack_job(raw, job_id)
     except Exception as exc:  # timeout or provider/runner failure
         duration = round(time.time() - start, 2)
         attempts += 1
@@ -104,15 +109,30 @@ async def process_job(db, redis, raw: str) -> None:
             )
             job["attempts"] = attempts
             await asyncio.sleep(backoff)
-            await redis.lpush(QUEUE_KEY, json.dumps(job))
+            await requeue_job(raw, job_id, json.dumps(job))
         else:
             logger.error(
                 "[worker] sync_failed type=%s user=%s attempts=%s duration=%ss err=%s",
                 job_type, user_id, attempts, duration, exc,
             )
             await redis.delete(f"{PENDING_PREFIX}{user_id}")
+            # Terminal failure after max retries: drop from processing.
+            await ack_job(raw, job_id)
     finally:
         await redis.delete(lock_key)
+
+
+async def watchdog_loop() -> None:
+    """Periodically recover orphan jobs left in the processing list by dead workers."""
+    logger.info("[watchdog] enabled interval=%ss", WATCHDOG_INTERVAL)
+    while True:
+        try:
+            n = await recover_orphans()
+            if n:
+                logger.warning("[watchdog] requeued %s orphan job(s)", n)
+        except Exception as exc:
+            logger.error("[watchdog] error: %s", exc)
+        await asyncio.sleep(WATCHDOG_INTERVAL)
 
 
 async def scheduler_loop(db) -> None:
@@ -149,7 +169,7 @@ async def main() -> None:
     except Exception as exc:  # best-effort, never blocks worker startup
         logger.warning("[worker] gccli bootstrap skipped: %s", exc)
 
-    # socket_timeout=None so blocking BRPOP is not cut short by the client.
+    # socket_timeout=None so blocking commands (BLMOVE) are not cut short.
     redis = aioredis.from_url(
         os.environ["REDIS_URL"],
         encoding="utf-8",
@@ -170,15 +190,18 @@ async def main() -> None:
     if SCHEDULE_INTERVAL > 0:
         asyncio.create_task(scheduler_loop(db))
 
+    # Reliable-queue watchdog: recovers jobs orphaned by crashed workers.
+    asyncio.create_task(watchdog_loop())
+
     while True:
         try:
             await sem.acquire()
-            item = await redis.brpop(QUEUE_KEY, timeout=5)
-            if not item:
+            claimed = await claim_job(timeout=5)
+            if not claimed:
                 sem.release()
                 continue
-            _key, raw = item
-            task = asyncio.create_task(process_job(db, redis, raw))
+            raw, job = claimed
+            task = asyncio.create_task(process_job(db, redis, raw, job))
             task.add_done_callback(lambda _t: sem.release())
         except asyncio.CancelledError:
             break
