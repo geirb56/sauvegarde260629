@@ -19,6 +19,8 @@ def _gccli_provider() -> GccliProvider:
         gccli_path=os.environ.get("GCCLI_PATH", "gccli"),
         home=os.environ.get("GCCLI_HOME", "/app/backend/.gccli_home"),
         keyring_backend=os.environ.get("GCCLI_KEYRING_BACKEND", "file"),
+        timeout_seconds=int(os.environ.get("GCCLI_TIMEOUT", "45")),
+        max_retries=int(os.environ.get("GCCLI_MAX_RETRIES", "3")),
     )
     return GccliProvider(runner=runner)
 

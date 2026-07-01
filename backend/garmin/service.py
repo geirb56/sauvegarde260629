@@ -78,6 +78,13 @@ def _activity_to_workout(act: dict, user_id: str) -> Optional[dict]:
 
 
 async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
+    """Perform the real Garmin sync (activities + daily metrics) and persist it.
+
+    IMPORTANT: this is executed by the out-of-process worker
+    (workers/sync_worker.py), never directly in the API request flow. The API
+    only enqueues jobs (jobs/queue.py); this function does the gccli fetch via
+    the provider and the MongoDB writes.
+    """
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if not conn or not conn.get("connected"):
         return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Garmin not connected"}

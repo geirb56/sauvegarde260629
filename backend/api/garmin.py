@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from garmin import service as garmin_service
+from jobs.queue import enqueue_sync
 
 garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
 
@@ -26,15 +27,24 @@ class GarminConnectRequest(BaseModel):
 
 @garmin_router.post("/connect")
 async def connect_garmin(request: Request, body: Optional[GarminConnectRequest] = None, user_id: str = "default"):
+    """Establish the Garmin session (fast auth check) and queue the initial sync.
+
+    Auth is a lightweight token/status check (non-blocking); the heavy activity
+    + metrics fetch is offloaded to the worker so the request returns instantly.
+    """
     db = request.app.state.db
     simulate_mfa = bool(body.simulate_mfa) if body else False
-    return await garmin_service.connect(db, user_id, simulate_mfa=simulate_mfa)
+    result = await garmin_service.connect(db, user_id, simulate_mfa=simulate_mfa)
+    if result.get("status") == "connected":
+        # Kick off the first data sync in the background (never blocks the API).
+        await enqueue_sync(user_id)
+    return result
 
 
 @garmin_router.post("/sync")
 async def sync_garmin(request: Request, user_id: str = "default"):
-    db = request.app.state.db
-    return await garmin_service.sync(db, user_id)
+    """Non-blocking: enqueue a Garmin sync job and return immediately."""
+    return await enqueue_sync(user_id)
 
 
 @garmin_router.get("/status")

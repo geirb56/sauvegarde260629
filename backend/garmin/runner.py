@@ -49,12 +49,15 @@ class GccliRunner:
         gccli_path: str = "gccli",
         home: Optional[str] = None,
         keyring_backend: str = "file",
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 45,
+        max_retries: int = 3,
     ):
         self.gccli_path = gccli_path
         self.home = home or os.environ.get("GCCLI_HOME", "/app/backend/.gccli_home")
         self.keyring_backend = keyring_backend
-        self.timeout = timeout_seconds
+        # Clamp per-command timeout to a safe 15-60s window.
+        self.timeout = max(15, min(60, timeout_seconds))
+        self.max_retries = max(1, max_retries)
         os.makedirs(self.home, exist_ok=True)
 
     # ------------------------------------------------------------------ utils
@@ -74,25 +77,56 @@ class GccliRunner:
         return env
 
     def _run_json(self, args: List[str], account: Optional[str] = None):
+        """Run a gccli data command with per-call timeout + bounded retries.
+
+        Each invocation is a fresh subprocess with its own env (isolated per
+        account, no shared state). Transient failures/timeouts are retried up
+        to max_retries with exponential backoff; parse errors are not retried.
+        """
         self._ensure_available()
         cmd = [self.gccli_path] + args + ["-j"]
-        cp = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=self.timeout,
-            env=self._env(account),
-        )
-        out = cp.stdout.decode("utf-8", errors="replace").strip()
-        err = cp.stderr.decode("utf-8", errors="replace").strip()
-        if cp.returncode != 0:
-            raise GccliError(f"gccli {' '.join(args)} failed: {err or out}")
-        if not out:
-            return {}
-        try:
-            return json.loads(out)
-        except json.JSONDecodeError as exc:
-            raise GccliError(f"gccli {' '.join(args)} returned non-JSON: {out[:200]}") from exc
+        last_err: Optional[Exception] = None
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                cp = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=self.timeout,
+                    env=self._env(account),
+                )
+                out = cp.stdout.decode("utf-8", errors="replace").strip()
+                err = cp.stderr.decode("utf-8", errors="replace").strip()
+                if cp.returncode != 0:
+                    raise GccliError(f"gccli {' '.join(args)} failed: {err or out}")
+                if not out:
+                    return {}
+                try:
+                    return json.loads(out)
+                except json.JSONDecodeError as exc:
+                    # Non-transient: bad output won't fix itself, don't retry.
+                    raise GccliError(
+                        f"gccli {' '.join(args)} returned non-JSON: {out[:200]}"
+                    ) from exc
+            except json.JSONDecodeError:
+                raise
+            except subprocess.TimeoutExpired:
+                last_err = GccliError(
+                    f"gccli {' '.join(args)} timed out after {self.timeout}s"
+                )
+            except GccliError as exc:
+                last_err = exc
+
+            if attempt < self.max_retries:
+                backoff = min(2 ** attempt, 8)
+                logger.warning(
+                    "[gccli] transient failure (attempt %s/%s) for '%s'; retrying in %ss",
+                    attempt, self.max_retries, " ".join(args), backoff,
+                )
+                time.sleep(backoff)
+
+        raise last_err or GccliError(f"gccli {' '.join(args)} failed")
 
     # ------------------------------------------------------------------- auth
     def auth_status(self, account: Optional[str] = None) -> dict:
