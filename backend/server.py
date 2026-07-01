@@ -55,6 +55,9 @@ from rag_engine import (
 from training_engine import (
     GOAL_CONFIG,
     compute_target_km,
+    vma_pace,
+    vma_pace_range,
+    adapt_session_to_readiness,
     compute_week_number,
     determine_phase,
     get_phase_description,
@@ -3267,6 +3270,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # 1. Get the planned session for this week
     plan = await generate_dynamic_training_plan(db, user["id"])
     sessions = plan.get("plan", {}).get("sessions", [])
+    # VMA is the single source of truth for all target paces.
+    vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
 
     # Find today's session by day name
     planned_session = None
@@ -3289,8 +3294,10 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     fatigue_data_source = "garmin"
     try:
         cardio_coach_data = await get_cardio_coach(user_id=user["id"])
-        fatigue_ratio = cardio_coach_data.get("metrics", {}).get("fatigue_ratio")
-        fatigue_status = cardio_coach_data.get("metrics", {}).get("fatigue_status")
+        _cc_metrics = cardio_coach_data.get("metrics", {}) or {}
+        fatigue_ratio = _cc_metrics.get("fatigue_ratio")
+        fatigue_status = _cc_metrics.get("fatigue_status")
+        run_readiness = _cc_metrics.get("run_readiness")
         recommendation = cardio_coach_data.get("recommendation")
         recommendation_color = cardio_coach_data.get("recommendation_color")
         
@@ -3304,6 +3311,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         fatigue_data_source = "default"
         fatigue_ratio = 1.0
         fatigue_status = "green"
+        run_readiness = 100
         recommendation = "RUN HARD"
         recommendation_color = "green"
 
@@ -3314,74 +3322,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     ).sort("date", -1).limit(10)
     recent_feedback = await feedback_cursor.to_list(10)
 
-    # 4. Apply adaptation logic based on RECOMMENDATION (not fatigue_ratio alone)
-    # This ensures consistency between what's displayed and what's applied
-    adaptive_session = planned_session.copy()
-    adaptation_applied = False
-    adaptation_reason = ""
+    # 4. Apply adaptation logic — the Run Readiness RECOMMENDATION is the SOURCE
+    # OF TRUTH. An EASY RUN / REST recommendation can NEVER leave the session
+    # unchanged. All target paces are recomputed from the estimated VMA.
+    adaptive_session, adaptation_applied, adaptation_reason = adapt_session_to_readiness(
+        planned_session, recommendation, recommendation_color, run_readiness, vma
+    )
 
-    # Normalize recommendation
-    rec_upper = (recommendation or "").upper().replace(" ", "")
-    
-    if rec_upper == "REST" or recommendation_color == "red":
-        # REST: Convert to recovery or rest day
-        adaptation_applied = True
-        adaptation_reason = "Repos recommandé - séance convertie en récupération active"
-
-        # Reduce duration by 50%
-        original_duration = planned_session.get("duration", "0min")
-        duration_match = __import__("re").match(r"(\d+)", original_duration)
-        if duration_match:
-            original_mins = int(duration_match.group(1))
-            new_mins = int(original_mins * 0.5)
-            adaptive_session["duration"] = f"{new_mins}min"
-
-        # Convert to recovery
-        adaptive_session["type"] = "Recovery"
-        adaptive_session["intensity"] = "recovery"
-
-        # Update details to Z1
-        original_distance = planned_session.get("distance_km", 0)
-        new_distance = round(original_distance * 0.5, 1) if original_distance else 0
-        adaptive_session["distance_km"] = new_distance
-        adaptive_session["details"] = f"{new_distance} km • Allure très facile • HR < 130 bpm • Zone 1"
-
-        # Reduce TSS
-        original_tss = planned_session.get("estimated_tss", 0)
-        adaptive_session["estimated_tss"] = int(original_tss * 0.4)
-
-    elif rec_upper in ["EASYRUN", "EASY"] or recommendation_color == "yellow":
-        # EASY RUN: Reduce intensity, convert hard sessions to easy
-        session_type = planned_session.get("type", "").lower()
-        
-        # Only adapt if it's a hard/moderate session
-        if any(x in session_type for x in ["interval", "threshold", "tempo", "fartlek", "fractionn"]):
-            adaptation_applied = True
-            adaptation_reason = "Easy run recommandé - intensité réduite"
-
-            # Reduce duration by 20%
-            original_duration = planned_session.get("duration", "0min")
-            duration_match = __import__("re").match(r"(\d+)", original_duration)
-            if duration_match:
-                original_mins = int(duration_match.group(1))
-                new_mins = int(original_mins * 0.8)
-                adaptive_session["duration"] = f"{new_mins}min"
-
-            # Convert to endurance
-            adaptive_session["type"] = "Endurance"
-            adaptive_session["intensity"] = "easy"
-
-            # Update distance and details
-            original_distance = planned_session.get("distance_km", 0)
-            new_distance = round(original_distance * 0.8, 1) if original_distance else 0
-            adaptive_session["distance_km"] = new_distance
-            adaptive_session["details"] = f"{new_distance} km • Allure facile • HR 130-145 bpm • Zone 2"
-
-            # Reduce TSS
-            original_tss = planned_session.get("estimated_tss", 0)
-            adaptive_session["estimated_tss"] = int(original_tss * 0.7)
-    
-    # RUN HARD (green): No adaptation needed, keep planned session
 
     # 5. Return both original and adaptive sessions
     return {
@@ -3395,10 +3342,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "fatigue": {
             "fatigue_ratio": round(fatigue_ratio, 2),
             "fatigue_status": fatigue_status,
+            "run_readiness": run_readiness,
             "recommendation": recommendation,
             "recommendation_color": recommendation_color,
             "data_source": fatigue_data_source
         },
+        "vma": vma,
+        "vma_confidence": plan.get("vma_confidence"),
         "recent_feedback": recent_feedback
     }
 

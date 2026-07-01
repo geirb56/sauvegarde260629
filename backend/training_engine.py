@@ -102,6 +102,115 @@ def compute_long_run_km(target_km: float, goal: str) -> int:
     return max(config["long_min"], min(config["long_max"], long_run))
 
 
+# ============================================================
+# PACE FROM VMA — SINGLE SOURCE OF TRUTH
+# All displayed target paces are derived from the estimated VMA:
+#   speed (km/h) = VMA * pct   ·   pace (min/km) = 60 / speed
+# %VMA reference: 60 recovery(Z1) · 65 active recovery · 70 very easy ·
+#   75 base endurance · 80 hard endurance (top Z2) · 85-90 threshold/tempo ·
+#   95-100 long intervals · 100-105 short intervals.
+# ============================================================
+
+def vma_pace(vma_kmh: float, pct: float) -> str:
+    """Target pace 'MM:SS' per km at a given fraction of VMA."""
+    speed = (vma_kmh or 0) * pct
+    if speed <= 0:
+        return "--:--"
+    pace_min = 60.0 / speed
+    m = int(pace_min)
+    s = int(round((pace_min - m) * 60))
+    if s >= 60:
+        m += 1
+        s -= 60
+    return f"{m}:{s:02d}"
+
+
+def vma_pace_range(vma_kmh: float, pct_low: float, pct_high: float) -> str:
+    """Pace range 'slow-fast' between two %VMA (pct_low < pct_high => slower shown first)."""
+    return f"{vma_pace(vma_kmh, pct_low)}-{vma_pace(vma_kmh, pct_high)}"
+
+
+def adapt_session_to_readiness(planned_session: Dict, recommendation: str,
+                               recommendation_color: str, run_readiness: Optional[float],
+                               vma: Optional[float]):
+    """Adapt today's planned session to the Run Readiness recommendation.
+
+    Run Readiness is the SOURCE OF TRUTH: an EASY RUN / REST recommendation can
+    NEVER leave the session unchanged (except a planned Rest day). Target paces
+    are recomputed from the estimated VMA.
+
+    Returns (adaptive_session: dict, adaptation_applied: bool, adaptation_reason: str).
+    """
+    import re
+    adaptive = dict(planned_session)
+    applied = False
+    reason = ""
+
+    rec_upper = (recommendation or "").upper().replace(" ", "")
+    session_type = (planned_session.get("type") or "").lower()
+    is_rest_type = session_type in ("rest", "repos") or planned_session.get("intensity") == "rest"
+    original_distance = planned_session.get("distance_km", 0) or 0
+    original_tss = planned_session.get("estimated_tss", 0) or 0
+    _dm = re.match(r"(\d+)", str(planned_session.get("duration", "0min")))
+    original_mins = int(_dm.group(1)) if _dm else 0
+
+    def dist_from(pct_mid, minutes):
+        if vma and minutes:
+            return round((vma * pct_mid) * (minutes / 60.0), 1)
+        return None
+
+    if is_rest_type:
+        # A planned rest day stays a rest day regardless of recommendation.
+        return adaptive, applied, reason
+
+    if rec_upper == "REST" or recommendation_color == "red":
+        if run_readiness is not None and run_readiness < 40:
+            # High fatigue -> complete rest, no pace displayed.
+            applied = True
+            reason = "Fatigue importante - repos complet recommandé"
+            adaptive.update({
+                "type": "Rest", "intensity": "rest", "duration": "0min",
+                "distance_km": 0, "estimated_tss": 0,
+                "details": "Repos complet • Récupération totale (aucune allure)",
+            })
+        else:
+            # Moderate fatigue -> active recovery 20-30 min @ 60-65% VMA, Z1.
+            applied = True
+            reason = "Fatigue modérée - séance convertie en récupération active"
+            rec_mins = 25
+            dist = dist_from(0.625, rec_mins) or round(original_distance * 0.4, 1)
+            pace = vma_pace_range(vma, 0.60, 0.65) if vma else None
+            adaptive.update({
+                "type": "Recovery", "intensity": "recovery", "duration": f"{rec_mins}min",
+                "distance_km": dist, "estimated_tss": int(original_tss * 0.4),
+                "details": (f"{dist} km • {pace}/km • HR < 130 bpm • Zone 1 (60-65% VMA)"
+                            if pace else f"{dist} km • Allure très facile • HR < 130 bpm • Zone 1"),
+            })
+        return adaptive, applied, reason
+
+    if rec_upper in ("EASYRUN", "EASY") or recommendation_color == "yellow":
+        # EASY RUN — always eases the session (even a planned Endurance run).
+        # Pace target 65-70% VMA, duration -15%.
+        applied = True
+        new_mins = int(original_mins * 0.85) if original_mins else 0
+        pace = vma_pace_range(vma, 0.65, 0.70) if vma else None
+        hard = any(x in session_type for x in ["interval", "threshold", "tempo", "fartlek", "fractionn", "seuil"])
+        dist = dist_from(0.675, new_mins) or round(original_distance * (0.8 if hard else 0.85), 1)
+        reason = ("Easy run recommandé - séance dure convertie en endurance facile"
+                  if hard else "Easy run recommandé - endurance ralentie (65-70% VMA)")
+        adaptive.update({
+            "type": "Endurance", "intensity": "easy",
+            "duration": f"{new_mins}min" if new_mins else planned_session.get("duration", "0min"),
+            "distance_km": dist, "estimated_tss": int(original_tss * 0.75),
+            "details": (f"{dist} km • {pace}/km • HR 130-145 bpm • Zone 2 (65-70% VMA)"
+                        if pace else f"{dist} km • Allure facile • HR 130-145 bpm • Zone 2"),
+        })
+        return adaptive, applied, reason
+
+    # RUN HARD (green): no adaptation, keep planned session (paces/HR unchanged).
+    return adaptive, applied, reason
+
+
 # Safety thresholds
 ACWR_SAFE_MIN = 0.8
 ACWR_SAFE_MAX = 1.3
@@ -507,6 +616,9 @@ __all__ = [
     "PHASE_VOLUME_MULTIPLIERS",
     "compute_target_km",
     "compute_long_run_km",
+    "vma_pace",
+    "vma_pace_range",
+    "adapt_session_to_readiness",
     "compute_week_number",
     "compute_acwr",
     "compute_tsb",
