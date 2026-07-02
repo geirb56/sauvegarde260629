@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from garmin import service as garmin_service
 from jobs.queue import enqueue_sync
+from jobs.health import queue_health
 
 import logging
 logger = logging.getLogger(__name__)
@@ -71,6 +72,28 @@ async def sync_garmin(request: Request, user_id: str = "default"):
 async def garmin_status(request: Request, user_id: str = "default"):
     db = request.app.state.db
     return await garmin_service.get_status(db, user_id)
+
+
+@garmin_router.get("/queue/health")
+async def garmin_queue_health():
+    """Lightweight, READ-ONLY Redis health snapshot of the sync queue.
+
+    Response JSON:
+      status                     "healthy" | "degraded" | "unhealthy"
+      redis_connected            bool
+      queue_length               int  — jobs waiting to be claimed
+      processing_length          int  — jobs currently in-flight
+      active_workers             int  — live worker heartbeats
+      oldest_processing_seconds  int  — age of the oldest in-flight job (0 if none)
+      orphans_recovered_total    int  — cumulative jobs requeued by the watchdog
+      failed_jobs_total          int  — cumulative jobs that failed after max retries
+      timestamp                  str  — ISO-8601 UTC
+
+    Status rules: UNHEALTHY if redis down OR active_workers==0 OR
+    oldest_processing>=120s OR queue_length>=2000; DEGRADED if queue_length>=500
+    OR oldest_processing>=96s; otherwise HEALTHY.
+    """
+    return await queue_health()
 
 
 @garmin_router.post("/disconnect")

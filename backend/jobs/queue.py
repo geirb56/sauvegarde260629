@@ -25,6 +25,15 @@ CLAIMS_KEY = "cardiocoach:garmin:claims"
 # A job stuck in processing longer than this (s) is considered orphaned.
 ORPHAN_TIMEOUT = int(os.environ.get("SYNC_ORPHAN_TIMEOUT", "120"))
 
+# --- Monitoring-only keys (additive instrumentation; no queue behaviour) ---
+# Per-worker heartbeat: cardiocoach:worker:heartbeat:{pid}, TTL-refreshed.
+HEARTBEAT_PREFIX = "cardiocoach:worker:heartbeat:"
+HEARTBEAT_TTL = int(os.environ.get("SYNC_HEARTBEAT_TTL", "15"))
+HEARTBEAT_INTERVAL = int(os.environ.get("SYNC_HEARTBEAT_INTERVAL", "10"))
+# Monotonic counters (INCR only).
+STATS_ORPHANS_KEY = "cardiocoach:stats:orphans_recovered"
+STATS_FAILED_KEY = "cardiocoach:stats:failed_jobs"
+
 # Job types
 JOB_SYNC_USER = "SYNC_USER"          # full sync: activities + daily health metrics
 JOB_SYNC_ACTIVITY = "SYNC_ACTIVITY"  # activities-focused sync
@@ -157,4 +166,7 @@ async def recover_orphans() -> int:
             await r.lpush(QUEUE_KEY, raw)
             recovered += 1
             logger.warning("[watchdog] recovered orphan job id=%s user=%s", job_id, job.get("user_id"))
+    if recovered:
+        # Monitoring counter only (additive; does not affect recovery logic).
+        await r.incrby(STATS_ORPHANS_KEY, recovered)
     return recovered

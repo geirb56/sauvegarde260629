@@ -39,6 +39,10 @@ from jobs.queue import (
     LOCK_PREFIX,
     LOCK_TTL,
     PENDING_PREFIX,
+    HEARTBEAT_PREFIX,
+    HEARTBEAT_TTL,
+    HEARTBEAT_INTERVAL,
+    STATS_FAILED_KEY,
     claim_job,
     ack_job,
     requeue_job,
@@ -116,6 +120,8 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
                 job_type, user_id, attempts, duration, exc,
             )
             await redis.delete(f"{PENDING_PREFIX}{user_id}")
+            # Monitoring counter only (additive; failure handling unchanged).
+            await redis.incr(STATS_FAILED_KEY)
             # Terminal failure after max retries: drop from processing.
             await ack_job(raw, job_id)
     finally:
@@ -133,6 +139,22 @@ async def watchdog_loop() -> None:
         except Exception as exc:
             logger.error("[watchdog] error: %s", exc)
         await asyncio.sleep(WATCHDOG_INTERVAL)
+
+
+async def heartbeat_loop(redis) -> None:
+    """Monitoring only: refresh this worker's presence key (TTL) periodically.
+
+    active_workers in /queue/health counts these keys. Best-effort: a failure
+    here never affects sync processing.
+    """
+    key = f"{HEARTBEAT_PREFIX}{os.getpid()}"
+    logger.info("[heartbeat] enabled key=%s ttl=%ss interval=%ss", key, HEARTBEAT_TTL, HEARTBEAT_INTERVAL)
+    while True:
+        try:
+            await redis.set(key, time.time(), ex=HEARTBEAT_TTL)
+        except Exception as exc:
+            logger.error("[heartbeat] error: %s", exc)
+        await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
 async def scheduler_loop(db) -> None:
@@ -192,6 +214,8 @@ async def main() -> None:
 
     # Reliable-queue watchdog: recovers jobs orphaned by crashed workers.
     asyncio.create_task(watchdog_loop())
+    # Monitoring-only heartbeat for /api/garmin/queue/health active_workers.
+    asyncio.create_task(heartbeat_loop(redis))
 
     while True:
         try:
