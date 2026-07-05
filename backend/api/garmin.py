@@ -83,7 +83,10 @@ async def garmin_activities(request: Request, user_id: str = "default",
     start_time) enables incremental UI updates ("give me what's newer than X").
     """
     cached = await realtime_cache.get_feed(user_id, since=since, limit=limit)
-    if cached:
+    # Serve from cache when it satisfies the request: incremental (since) reads
+    # are always cache-authoritative; full reads need at least `limit` items so a
+    # cold/partial cache doesn't return fewer results than the DB actually has.
+    if cached and (since or len(cached) >= limit):
         return {"activities": cached, "count": len(cached), "source": "cache"}
     db = request.app.state.db
     items = await garmin_service.list_activities(db, user_id, limit=limit, since=since)

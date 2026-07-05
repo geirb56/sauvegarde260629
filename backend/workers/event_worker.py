@@ -45,10 +45,15 @@ async def handle_event(db, ev: dict) -> None:
     activity = ev.get("activity") or {}
     if not user_id or not activity.get("external_id"):
         return
-    # a) derived workouts (product layer)
+    # a) derived workouts (product layer) — key by (id, user_id) so activities
+    # from different users can never overwrite each other.
     workout = activity_to_workout(activity, user_id)
     if workout:
-        await db.workouts.update_one({"id": workout["id"]}, {"$set": workout}, upsert=True)
+        await db.workouts.update_one(
+            {"id": workout["id"], "user_id": user_id},
+            {"$set": workout},
+            upsert=True,
+        )
     # b) instant feed cache
     await realtime_cache.update_feed(user_id, activity)
 
