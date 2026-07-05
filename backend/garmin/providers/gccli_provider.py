@@ -9,6 +9,7 @@ token that auto-refreshes. The password is never stored by us.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Dict, List, Optional
 
 from config.secrets import get_secret
@@ -61,8 +62,17 @@ class GccliProvider(Provider):
 
     def sync_activities(self, user_id: str, since: Optional[str] = None) -> List[Dict]:
         account = self._account()
-        raw = self._runner.fetch_activities(limit=30, account=account)
-        return [self._normalize(a) for a in raw if a]
+        # Incremental (since given): fetch a small batch and keep only newer ones,
+        # keeping Garmin API usage flat. Full sync: a larger recent window.
+        if since:
+            limit = int(os.environ.get("GARMIN_INCREMENTAL_LIMIT", "10"))
+        else:
+            limit = int(os.environ.get("GARMIN_FULL_LIMIT", "30"))
+        raw = self._runner.fetch_activities(limit=limit, account=account)
+        acts = [self._normalize(a) for a in raw if a]
+        if since:
+            acts = [a for a in acts if (a.get("start_time") or "") > since]
+        return acts
 
     def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
         account = self._account()

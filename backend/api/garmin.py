@@ -18,9 +18,15 @@ from pydantic import BaseModel
 from garmin import service as garmin_service
 from jobs.queue import enqueue_sync
 from jobs.health import queue_health
+from jobs.redis_client import get_redis
+from feed import realtime_cache
 
 import logging
+import time
 logger = logging.getLogger(__name__)
+
+ACTIVE_SIGNAL_PREFIX = "cardiocoach:active_signal:"
+ACTIVE_SIGNAL_TTL = 45 * 60  # 45 min — matches scheduler ACTIVE window
 
 garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
 
@@ -68,6 +74,45 @@ async def sync_garmin(request: Request, user_id: str = "default"):
     return res
 
 
+@garmin_router.get("/activities")
+async def garmin_activities(request: Request, user_id: str = "default",
+                            limit: int = 20, since: Optional[str] = None):
+    """Ultra-fast feed: Redis cache first, MongoDB fallback (+cache warm).
+
+    Backward compatible: response is still {activities, count}. `since` (ISO
+    start_time) enables incremental UI updates ("give me what's newer than X").
+    """
+    cached = await realtime_cache.get_feed(user_id, since=since, limit=limit)
+    if cached:
+        return {"activities": cached, "count": len(cached), "source": "cache"}
+    db = request.app.state.db
+    items = await garmin_service.list_activities(db, user_id, limit=limit, since=since)
+    # Warm the cache from the source of truth (only on a full, unfiltered read).
+    if items and not since:
+        try:
+            await realtime_cache.warm_feed(user_id, items)
+        except Exception as exc:  # cache warming must never break the response
+            logger.warning("[garmin] feed warm failed user=%s: %s", user_id, exc)
+    return {"activities": items, "count": len(items), "source": "db"}
+
+
+@garmin_router.post("/activity-signal")
+async def garmin_activity_signal(user_id: str = "default"):
+    """Mark a user as ACTIVE from app interaction (used ONLY by the scheduler).
+
+    Does NOT trigger a sync, call gccli, or touch activities/workouts. It simply
+    stores a fresh app-interaction timestamp in Redis (TTL-based), which the
+    scheduler worker reads to bump the user into the ACTIVE sync tier.
+    """
+    try:
+        r = get_redis()
+        await r.set(f"{ACTIVE_SIGNAL_PREFIX}{user_id}", str(time.time()), ex=ACTIVE_SIGNAL_TTL)
+        return {"status": "ok", "tier_hint": "active", "ttl_seconds": ACTIVE_SIGNAL_TTL}
+    except Exception as exc:
+        logger.error("[garmin] activity-signal failed user=%s: %s", user_id, exc)
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+
+
 @garmin_router.get("/status")
 async def garmin_status(request: Request, user_id: str = "default"):
     db = request.app.state.db
@@ -100,13 +145,6 @@ async def garmin_queue_health():
 async def disconnect_garmin(request: Request, user_id: str = "default"):
     db = request.app.state.db
     return await garmin_service.disconnect(db, user_id)
-
-
-@garmin_router.get("/activities")
-async def garmin_activities(request: Request, user_id: str = "default", limit: int = 20):
-    db = request.app.state.db
-    items = await garmin_service.list_activities(db, user_id, limit=limit)
-    return {"activities": items, "count": len(items)}
 
 
 @garmin_router.get("/daily-metrics")

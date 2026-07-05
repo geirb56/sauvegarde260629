@@ -12,6 +12,7 @@ from typing import Optional
 
 from .factory import get_provider, active_provider_name
 from .providers.base import STATUS_CONNECTED, STATUS_MFA_REQUIRED
+from events.stream import emit_activity_created
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,11 @@ _ACTIVITY_TYPE_TO_WORKOUT = {
 }
 
 
-def _activity_to_workout(act: dict, user_id: str) -> Optional[dict]:
+def activity_to_workout(act: dict, user_id: str) -> Optional[dict]:
     """Map a normalized Garmin activity to the app's workout schema.
 
-    Returns None if essential fields are missing.
+    Used by the fan-out event worker to build the derived `workouts` (product)
+    layer. Returns None if essential fields are missing.
     """
     ext_id = act.get("external_id")
     if not ext_id:
@@ -77,13 +79,58 @@ def _activity_to_workout(act: dict, user_id: str) -> Optional[dict]:
     }
 
 
-async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
-    """Perform the real Garmin sync (activities + daily metrics) and persist it.
+async def _ingest_activities(db, user_id: str, activities: list) -> dict:
+    """Ingestion layer (SOURCE OF TRUTH): upsert into `garmin_activities`,
+    dedupe by external_id, and emit ACTIVITY_CREATED for each NEW activity.
 
-    IMPORTANT: this is executed by the out-of-process worker
-    (workers/sync_worker.py), never directly in the API request flow. The API
-    only enqueues jobs (jobs/queue.py); this function does the gccli fetch via
-    the provider and the MongoDB writes.
+    Never writes `workouts` directly — that derived layer is built by the
+    fan-out event worker consuming ACTIVITY_CREATED.
+    """
+    synced = new_count = 0
+    newest_start = None
+    for act in activities:
+        ext_id = act.get("external_id")
+        if not ext_id:
+            continue
+        doc = {**act, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}
+        res = await db.garmin_activities.update_one(
+            {"user_id": user_id, "external_id": ext_id},
+            {"$set": doc},
+            upsert=True,
+        )
+        synced += 1
+        start_time = act.get("start_time")
+        if start_time and (newest_start is None or start_time > newest_start):
+            newest_start = start_time
+        # Emit only on first insert (dedupe) -> "created" event, no re-emit.
+        if res.upserted_id is not None:
+            new_count += 1
+            try:
+                await emit_activity_created(user_id, doc)
+            except Exception as exc:  # event bus must never fail ingestion
+                logger.error("[Garmin] emit ACTIVITY_CREATED failed user=%s: %s", user_id, exc)
+    return {"synced": synced, "new": new_count, "newest_start": newest_start}
+
+
+async def _finalize_connection(db, user_id: str, newest_start: Optional[str]) -> int:
+    total = await db.garmin_activities.count_documents({"user_id": user_id})
+    update = {
+        "last_sync": datetime.now(timezone.utc).isoformat(),
+        "activity_count": total,
+    }
+    if newest_start:
+        update["last_activity_at"] = newest_start
+    await db.garmin_connections.update_one({"user_id": user_id}, {"$set": update})
+    return total
+
+
+async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
+    """Full Garmin sync (activities + daily metrics), used for manual triggers.
+
+    Executed by the out-of-process worker (workers/sync_worker.py), never in the
+    API request flow. Writes only the ingestion layer (`garmin_activities`) and
+    emits ACTIVITY_CREATED events; the `workouts` product layer + feed cache are
+    built asynchronously by the fan-out event worker.
     """
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if not conn or not conn.get("connected"):
@@ -98,27 +145,7 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
         logger.error("[Garmin] activity sync failed user=%s: %s", user_id, exc)
         return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Sync failed, please reconnect"}
 
-    synced = 0
-    for act in activities:
-        ext_id = act.get("external_id")
-        if not ext_id:
-            continue
-        doc = {**act, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}
-        await db.garmin_activities.update_one(
-            {"user_id": user_id, "external_id": ext_id},
-            {"$set": doc},
-            upsert=True,
-        )
-        # Mirror into the main workouts collection so the activity appears in
-        # Dashboard (Recent Workouts) and Progress (All Workouts).
-        workout_doc = _activity_to_workout(act, user_id)
-        if workout_doc:
-            await db.workouts.update_one(
-                {"id": workout_doc["id"]},
-                {"$set": workout_doc},
-                upsert=True,
-            )
-        synced += 1
+    ingest = await _ingest_activities(db, user_id, activities)
 
     # --- Daily health metrics (Phase 2: HRV / resting HR / sleep) ---
     metrics_count = 0
@@ -137,20 +164,51 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     except Exception as exc:
         logger.warning("[Garmin] daily metrics sync skipped user=%s: %s", user_id, exc)
 
-    total = await db.garmin_activities.count_documents({"user_id": user_id})
-    await db.garmin_connections.update_one(
-        {"user_id": user_id},
-        {"$set": {
-            "last_sync": datetime.now(timezone.utc).isoformat(),
-            "activity_count": total,
-        }},
-    )
-    logger.info("[Garmin] synced %d activities, %d daily metrics user=%s", synced, metrics_count, user_id)
+    await _finalize_connection(db, user_id, ingest["newest_start"])
+    logger.info("[Garmin] synced %d activities (%d new), %d daily metrics user=%s",
+                ingest["synced"], ingest["new"], metrics_count, user_id)
     return {
         "success": True,
-        "synced_count": synced,
+        "synced_count": ingest["synced"],
+        "new_count": ingest["new"],
         "metrics_count": metrics_count,
-        "message": f"Imported {synced} activities",
+        "message": f"Imported {ingest['synced']} activities",
+    }
+
+
+async def incremental_sync(db, user_id: str) -> dict:
+    """Incremental sync: fetch ONLY activities newer than the last stored one.
+
+    Uses `since = last_activity_timestamp` so Garmin API usage stays flat (small
+    payload) vs a full re-sync. Activities-only (no daily-metrics fetch) to keep
+    the batch light; dedupe + event emission happen in _ingest_activities.
+    """
+    conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    if not conn or not conn.get("connected"):
+        return {"success": False, "synced_count": 0, "new_count": 0, "message": "Garmin not connected"}
+
+    last = await db.garmin_activities.find_one(
+        {"user_id": user_id}, {"_id": 0, "start_time": 1}, sort=[("start_time", -1)]
+    )
+    since = last.get("start_time") if last else None
+
+    provider = get_provider()
+    try:
+        activities = provider.sync_activities(user_id, since=since)
+    except Exception as exc:
+        logger.error("[Garmin] incremental sync failed user=%s: %s", user_id, exc)
+        return {"success": False, "synced_count": 0, "new_count": 0, "message": "Sync failed"}
+
+    ingest = await _ingest_activities(db, user_id, activities)
+    await _finalize_connection(db, user_id, ingest["newest_start"])
+    logger.info("[Garmin] incremental synced=%d new=%d user=%s since=%s",
+                ingest["synced"], ingest["new"], user_id, since)
+    return {
+        "success": True,
+        "synced_count": ingest["synced"],
+        "new_count": ingest["new"],
+        "metrics_count": 0,
+        "message": f"{ingest['new']} new activities",
     }
 
 
@@ -192,9 +250,12 @@ async def get_daily_metrics(db, user_id: str, days: int = 7) -> dict:
     return {"metrics": metrics, "latest": latest, "count": len(metrics)}
 
 
-async def list_activities(db, user_id: str, limit: int = 20) -> list:
+async def list_activities(db, user_id: str, limit: int = 20, since: Optional[str] = None) -> list:
+    query = {"user_id": user_id}
+    if since:
+        query["start_time"] = {"$gt": since}
     cursor = (
-        db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
+        db.garmin_activities.find(query, {"_id": 0})
         .sort("start_time", -1)
         .limit(limit)
     )

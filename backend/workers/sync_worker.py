@@ -36,6 +36,7 @@ from jobs.queue import (
     QUEUE_KEY,
     JOB_SYNC_USER,
     JOB_SYNC_ACTIVITY,
+    JOB_INCREMENTAL_SYNC,
     LOCK_PREFIX,
     LOCK_TTL,
     PENDING_PREFIX,
@@ -48,6 +49,7 @@ from jobs.queue import (
     requeue_job,
     recover_orphans,
 )
+from sync import rate_limiter
 from garmin import service as garmin_service
 from garmin.bootstrap import ensure_gccli_installed
 
@@ -69,6 +71,8 @@ SCHEDULE_STAGGER_MS = int(os.environ.get("SYNC_SCHEDULE_STAGGER_MS", "200"))
 
 
 async def _run_job(db, job_type: str, user_id: str) -> dict:
+    if job_type == JOB_INCREMENTAL_SYNC:
+        return await garmin_service.incremental_sync(db, user_id)
     if job_type in (JOB_SYNC_USER, JOB_SYNC_ACTIVITY):
         # service.sync is idempotent (upserts) and writes to Mongo.
         return await garmin_service.sync(db, user_id)
@@ -89,17 +93,27 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         await requeue_job(raw, job_id)
         return
 
+    # Global anti-explosion cap (cluster-wide). If saturated, requeue and back off.
+    if not await rate_limiter.acquire_global_slot():
+        logger.info("[worker] global sync cap reached -> requeue user=%s", user_id)
+        await redis.delete(lock_key)
+        await asyncio.sleep(2)
+        await requeue_job(raw, job_id)
+        return
+
     start = time.time()
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
         result = await asyncio.wait_for(_run_job(db, job_type, user_id), timeout=JOB_TIMEOUT)
         duration = round(time.time() - start, 2)
         logger.info(
-            "[worker] sync_success type=%s user=%s duration=%ss synced=%s metrics=%s",
+            "[worker] sync_success type=%s user=%s duration=%ss synced=%s new=%s metrics=%s",
             job_type, user_id, duration,
-            result.get("synced_count"), result.get("metrics_count"),
+            result.get("synced_count"), result.get("new_count"), result.get("metrics_count"),
         )
         await redis.delete(f"{PENDING_PREFIX}{user_id}")
+        # Cooldown: throttle auto-syncs for this user after a successful run.
+        await rate_limiter.set_cooldown(user_id)
         # ACK only on success: this is the single point that removes the job.
         await ack_job(raw, job_id)
     except Exception as exc:  # timeout or provider/runner failure
@@ -125,6 +139,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
             # Terminal failure after max retries: drop from processing.
             await ack_job(raw, job_id)
     finally:
+        await rate_limiter.release_global_slot()
         await redis.delete(lock_key)
 
 

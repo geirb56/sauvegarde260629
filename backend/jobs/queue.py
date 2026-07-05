@@ -37,6 +37,7 @@ STATS_FAILED_KEY = "cardiocoach:stats:failed_jobs"
 # Job types
 JOB_SYNC_USER = "SYNC_USER"          # full sync: activities + daily health metrics
 JOB_SYNC_ACTIVITY = "SYNC_ACTIVITY"  # activities-focused sync
+JOB_INCREMENTAL_SYNC = "INCREMENTAL_SYNC"  # incremental: only new activities (since last)
 
 # Redis keys for throttling / dedupe
 LOCK_PREFIX = "sync_lock:"       # per-user concurrency lock (worker side)
@@ -78,6 +79,11 @@ async def enqueue_sync(user_id: str) -> dict:
 async def enqueue_activity_sync(user_id: str) -> dict:
     """Queue an activities-focused sync."""
     return await _enqueue_deduped(JOB_SYNC_ACTIVITY, user_id)
+
+
+async def enqueue_incremental_sync(user_id: str) -> dict:
+    """Queue an incremental sync (only new activities since the last one)."""
+    return await _enqueue_deduped(JOB_INCREMENTAL_SYNC, user_id)
 
 
 # --------------------------------------------------------------------------- #
