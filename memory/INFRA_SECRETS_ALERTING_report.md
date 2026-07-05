@@ -61,6 +61,27 @@ si une session existe. Vérifié en live : startup OK (`existing session found`)
 
 Aucune intégration runtime (pas de polling, pas d'endpoint) à ce stade.
 
+### 3. Process monitor dédié — `workers/monitor_worker.py` (ajout 2026-07-05)
+Process **autonome** géré par supervisor (`monitor-worker`), **séparé de
+sync_worker** et de FastAPI. Découplé de gccli/sync (lecture Redis seule).
+- Boucle : `queue_health()` → `evaluate_queue_health()` → `send_alert()`.
+- **Intervalle adaptatif** : 30s (unhealthy) / 60s (degraded) / 120s (healthy).
+- **Alertes sur changement d'état uniquement** (anti-spam) : le niveau émis
+  précédemment est stocké dans Redis (`cardiocoach:alert:last_level`) ; on
+  n'émet que si le niveau change, plus un message de **récupération** (`info`)
+  au retour `healthy`.
+- **Scalabilité horizontale** : élection de leader via lock Redis
+  (`cardiocoach:alert:leader`, TTL 150s > interval max). Un seul monitor évalue
+  et alerte ; les autres sont des **hot standbys** qui reprennent si le leader
+  meurt. Les streaks (`cardiocoach:alert:state`) et `last_level` sont dans Redis
+  → aucune remise à zéro ni doublon d'alerte quand on scale.
+- Ne bloque jamais l'app ni les sync workers ; toute erreur est loggée et la
+  boucle survit.
+
+Supervisor : `[program:monitor-worker]` (priority 30, autorestart). Vérifié en
+live : `[monitor] started ... intervals=30/60/120` puis `tick status=healthy
+emitted=None next=120s`.
+
 ---
 
 ## Fichiers
@@ -92,6 +113,11 @@ Aucune intégration runtime (pas de polling, pas d'endpoint) à ce stade.
   degraded 5×→warning, healthy reset, changement de statut casse le streak,
   statut inconnu no-op, send_alert sans webhook = no-op, échec webhook retry×1
   puis avalé).
+- `python -m tests.test_monitor_worker` → **ALL PASSED ✅** (intervalle adaptatif
+  30/60/120 ; alerte critique émise **une seule fois** puis répétitions
+  supprimées ; récupération `info` unique au retour healthy ; escalade
+  warning→critical ; élection de leader : un seul leader, standby refusé, refresh
+  TTL OK).
 - Fail-fast contextuel vérifié : gccli non-auth + secret absent → `MissingSecretError`
   (nomme `GARMIN_PASSWORD`) ; mock → pas de crédential requis ; gccli authentifié
   → pas de crash sans password.
