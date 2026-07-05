@@ -26,6 +26,8 @@ import tarfile
 import tempfile
 import urllib.request
 
+from config.secrets import get_secret
+
 logger = logging.getLogger(__name__)
 
 GITHUB_LATEST = "https://api.github.com/repos/bpauli/gccli/releases/latest"
@@ -103,28 +105,45 @@ def ensure_gccli_installed(bin_dir: str = DEFAULT_BIN_DIR, timeout: int = 90) ->
 
 
 def ensure_logged_in() -> None:
-    """Best-effort one-time gccli login at startup (provider=gccli only)."""
-    if os.environ.get("GARMIN_PROVIDER", "").strip().lower() != "gccli":
+    """One-time gccli login at startup (provider=gccli only), with contextual
+    fail-fast on missing credentials.
+
+    - provider != gccli  -> no Garmin credentials required (returns).
+    - gccli runner unavailable / auth check fails -> best-effort skip (no crash).
+    - gccli with an existing valid session -> returns without needing a password.
+    - gccli that MUST perform a real authentication -> GARMIN_USERNAME and
+      GARMIN_PASSWORD become mandatory; missing ones raise MissingSecretError
+      (fail-fast with a clear message). Startup never fails *solely* because
+      GARMIN_PASSWORD is absent when a session already exists.
+    """
+    if get_secret("GARMIN_PROVIDER", "").strip().lower() != "gccli":
         return
-    account = os.environ.get("GARMIN_USERNAME")
-    password = os.environ.get("GARMIN_PASSWORD")
-    if not account or not password:
-        logger.info("[gccli] no backend credentials configured; skipping startup login")
-        return
+
     try:
         from .factory import get_provider
 
         provider = get_provider()
         runner = getattr(provider, "_runner", None)
         if runner is None or not runner.is_available():
+            logger.info("[gccli] runner unavailable; skipping startup login")
             return
-        if runner.is_authenticated(account):
+        account = get_secret("GARMIN_USERNAME")
+        if account and runner.is_authenticated(account):
             logger.info("[gccli] existing session found for %s", account)
             return
+    except Exception as exc:  # noqa: BLE001 — auth check is best-effort
+        logger.warning("[gccli] startup auth check skipped: %s", exc)
+        return
+
+    # No valid session: a real authentication is required now, so both
+    # credentials become mandatory. Fail fast with a clear message.
+    account = get_secret("GARMIN_USERNAME", required=True)
+    password = get_secret("GARMIN_PASSWORD", required=True)
+    try:
         runner.login(account, password)
         logger.info("[gccli] startup login successful")
-    except Exception as exc:  # noqa: BLE001 — best effort
-        logger.warning("[gccli] startup login skipped: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — login failure is non-fatal
+        logger.warning("[gccli] startup login failed: %s", exc)
 
 
 def bootstrap() -> None:

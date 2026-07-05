@@ -9,8 +9,9 @@ token that auto-refreshes. The password is never stored by us.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Dict, List, Optional
+
+from config.secrets import get_secret
 
 from ..runner import GccliRunner, GccliUnavailable, GccliMfaRequired, GccliError
 from .base import (
@@ -31,7 +32,7 @@ class GccliProvider(Provider):
         self._runner = runner
 
     def _account(self) -> Optional[str]:
-        return os.environ.get("GARMIN_USERNAME")
+        return get_secret("GARMIN_USERNAME")
 
     def connect(self, user_id: str, simulate_mfa: bool = False) -> ConnectResult:
         if not self._runner.is_available():
@@ -43,7 +44,7 @@ class GccliProvider(Provider):
             return ConnectResult(status=STATUS_CONNECTED, detail="Garmin connected")
 
         # Need a one-time login using backend-controlled credentials.
-        password = os.environ.get("GARMIN_PASSWORD")
+        password = get_secret("GARMIN_PASSWORD")
         if not account or not password:
             return ConnectResult(status=STATUS_ERROR, detail="Garmin connector not configured.")
         try:

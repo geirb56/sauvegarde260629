@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
+from config.secrets import MissingSecretError
 
 # Import the analysis engine (NO LLM dependencies)
 from analysis_engine import (
@@ -5289,6 +5290,9 @@ async def create_db_indexes():
     try:
         from garmin.bootstrap import bootstrap as garmin_bootstrap
         garmin_bootstrap()
+    except MissingSecretError:
+        # Fail-fast: gccli must authenticate but a required secret is missing.
+        raise
     except Exception as e:
         logger.warning(f"gccli bootstrap skipped: {e}")
     try:
