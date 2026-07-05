@@ -71,3 +71,27 @@ Nouveaux process supervisor : `event-worker` (priority 25), `scheduler-worker` (
   effectué (couche dérivée, régénérable en re-jouant un sync). Les nouvelles
   activités passent par le pipeline event-driven.
 - Provider abstraction et frontend inchangés (conformément aux contraintes).
+
+---
+
+## SSE — couche de livraison temps réel (2026-07-05)
+`GET /api/garmin/feed/stream?user_id=...` — Server-Sent Events, **lecture seule**.
+- Pure couche de livraison : aucun sync, aucun gccli, aucune écriture DB.
+- Consomme le Redis Stream via **XREAD non-destructif** (pas de consumer group)
+  → le groupe fan-out reste intact, N clients / N instances lisent en parallèle
+  (scalable horizontalement).
+- **Reconnect-safe / idempotent** : reprise depuis l'en-tête `Last-Event-ID`
+  (ou `?last_id=`) = id d'entrée du Stream ; aucun état serveur par client.
+- Filtre par `user_id` ; frames `event: activity_created` + heartbeats `: ping`.
+- Empreinte faible : 1 connexion Redis dédiée par flux (isolée du pool partagé),
+  fermée à la déconnexion ; `feed/sse.py`.
+- Modules/handler : `feed/sse.py::event_stream`, endpoint dans `api/garmin.py`.
+- Tests `tests/test_sse.py` → **ALL PASSED** (livraison + filtrage user, reprise
+  via Last-Event-ID sans replay). Vérifié en direct sur `localhost:8001` :
+  `: connected` puis frame `id:/event: activity_created/data:` filtrée.
+
+⚠️ **Limitation infra preview** : l'ingress du preview **bufferise** les réponses
+streaming (le flux n'apparaît pas via l'URL externe, mais fonctionne en local).
+En production, l'ingress/proxy doit désactiver le buffering pour `text/event-stream`
+(l'en-tête `X-Accel-Buffering: no` est déjà envoyé pour nginx ; pour d'autres
+proxys, régler `proxy_buffering off`).

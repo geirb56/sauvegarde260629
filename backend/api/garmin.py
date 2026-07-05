@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from garmin import service as garmin_service
@@ -20,6 +20,7 @@ from jobs.queue import enqueue_sync
 from jobs.health import queue_health
 from jobs.redis_client import get_redis
 from feed import realtime_cache
+from feed.sse import event_stream
 
 import logging
 import time
@@ -97,6 +98,28 @@ async def garmin_activities(request: Request, user_id: str = "default",
         except Exception as exc:  # cache warming must never break the response
             logger.warning("[garmin] feed warm failed user=%s: %s", user_id, exc)
     return {"activities": items, "count": len(items), "source": "db"}
+
+
+@garmin_router.get("/feed/stream")
+async def garmin_feed_stream(request: Request, user_id: str = "default",
+                             last_id: Optional[str] = None):
+    """Server-Sent Events stream of ACTIVITY_CREATED for a user (READ-ONLY).
+
+    Pure delivery layer over the Redis Stream: no sync, no gccli, no DB writes.
+    Reconnect-safe — resumes from the `Last-Event-ID` header (or `last_id` query
+    param); defaults to only-new events. Non-destructive XREAD -> horizontally
+    scalable. Emits `event: activity_created` frames + `: ping` heartbeats.
+    """
+    start_id = last_id or request.headers.get("Last-Event-ID") or "$"
+    return StreamingResponse(
+        event_stream(user_id, request, start_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable proxy buffering for SSE
+        },
+    )
 
 
 @garmin_router.post("/activity-signal")
