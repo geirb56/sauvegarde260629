@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from garmin import service as garmin_service
+from garmin import backfill as garmin_backfill
 from jobs.queue import enqueue_sync
 from jobs.health import queue_health
 from jobs.redis_client import get_redis
@@ -98,6 +99,25 @@ async def garmin_activities(request: Request, user_id: str = "default",
         except Exception as exc:  # cache warming must never break the response
             logger.warning("[garmin] feed warm failed user=%s: %s", user_id, exc)
     return {"activities": items, "count": len(items), "source": "db"}
+
+
+@garmin_router.post("/backfill")
+async def garmin_backfill_endpoint(request: Request, user_id: str = "default",
+                                  scope: str = "user"):
+    """On-demand rebuild of the derived `workouts` layer + feed cache from
+    `garmin_activities` (source of truth). Never calls gccli, never modifies
+    garmin_activities. Idempotent.
+
+    - scope=user (default): backfill one user synchronously, returns counts.
+    - scope=all: backfill every user in a background task, returns immediately.
+    """
+    import asyncio
+    db = request.app.state.db
+    if scope == "all":
+        asyncio.create_task(garmin_backfill.backfill_all(db))
+        return {"status": "started", "scope": "all"}
+    result = await garmin_backfill.backfill_user(db, user_id)
+    return {"status": "ok", **result}
 
 
 @garmin_router.get("/feed/stream")
