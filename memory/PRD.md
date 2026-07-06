@@ -146,6 +146,8 @@ Deleted the `get_mock_workouts()` function and removed its fallback from all 8 e
 - ✅ [2026-07-05] Added Spanish (es) to LLM prompts (`_LANG_NAMES` + chat system prompt "FR, EN or ES"). Verified live: `/api/rag/weekly-review?language=es` → Spanish ("¡Felicidades...").
 - ✅ [2026-07-05] On-demand workouts backfill: new `garmin/backfill.py` (`backfill_user`, `backfill_all`) re-derives `workouts` + feed cache from `garmin_activities` (source of truth), idempotent, prunes orphan Garmin-derived workouts (keeps manual/non-garmin), never calls gccli. Endpoint `POST /api/garmin/backfill?user_id=&scope=user|all` (scope=all runs in background). Verified: default 31 activities→31 workouts; orphan pruned, manual workout preserved.
 
+- ✅ [2026-07-06] Fixed residual English in Workout "Analyse enrichie" (RAG) section. The RAG engine emits structured English tokens (`comparison.progression` e.g. "9 sec/km faster", `points_forts`, `points_ameliorer`); only `rag_summary` was LLM-localized. Now `GET /rag/workout/{id}` localizes progression + strengths + areas-to-improve via `localization.localize_fields` (cached, EN=no-op) and `WorkoutDetail.jsx` passes `?language=${lang}` to the RAG call. Also fixed detailed-analysis intensity fallback to be language-aware. Verified FR ("9 sec/km plus rapide", "progression du rythme", "varier les types de séance") + ES via curl and screenshot.
+
 ## P1 (High Priority) - Backlog
 - Real Terra API integration (requires user API key)
 - Stripe payment integration (requires API key)

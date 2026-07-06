@@ -331,7 +331,7 @@ export default function WorkoutDetail() {
         axios.get(`${API}/workouts/${id}`),
         axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`),
         axios.get(`${API}/coach/detailed-analysis/${id}?language=${lang}`).catch(() => ({ data: null })),
-        axios.get(`${API}/rag/workout/${id}`).catch(() => ({ data: null }))
+        axios.get(`${API}/rag/workout/${id}?language=${lang}`).catch(() => ({ data: null }))
       ]);
       setWorkout(workoutRes.data);
       setAnalysis(analysisRes.data);

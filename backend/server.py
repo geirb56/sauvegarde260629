@@ -2198,12 +2198,29 @@ async def get_rag_workout_analysis(workout_id: str, user_id: str = "default", la
         language=language
     )
     
+    comparison = result["comparison"]
+    points_forts = result["points_forts"]
+    points_ameliorer = result["points_ameliorer"]
+
+    # Localize the engine's structured English tokens (progression, strengths,
+    # areas to improve) into the user's language (cached; EN = no-op).
+    if (language or "en").lower() != "en":
+        to_loc = {"progression": comparison.get("progression") or ""}
+        for i, v in enumerate(points_forts):
+            to_loc[f"pf_{i}"] = v
+        for i, v in enumerate(points_ameliorer):
+            to_loc[f"pa_{i}"] = v
+        loc = await localization.localize_fields(to_loc, language, user_id)
+        comparison = {**comparison, "progression": loc.get("progression") or comparison.get("progression")}
+        points_forts = [loc.get(f"pf_{i}", v) for i, v in enumerate(points_forts)]
+        points_ameliorer = [loc.get(f"pa_{i}", v) for i, v in enumerate(points_ameliorer)]
+
     return {
         "rag_summary": enriched_summary,
         "workout": result["workout"],
-        "comparison": result["comparison"],
-        "points_forts": result["points_forts"],
-        "points_ameliorer": result["points_ameliorer"],
+        "comparison": comparison,
+        "points_forts": points_forts,
+        "points_ameliorer": points_ameliorer,
         "tips": result["tips"],
         "rag_sources": result.get("rag_sources", {}),
         "enriched_by_llm": used_llm,
@@ -2469,7 +2486,7 @@ async def get_detailed_analysis(workout_id: str, language: str = "en", user_id: 
     }
     
     execution = {
-        "intensity": intensity_labels.get(intensity_level, "Modérée"),
+        "intensity": intensity_labels.get(intensity_level, intensity_labels["moderate"]),
         "volume": volume,
         "regularity": regularity
     }
