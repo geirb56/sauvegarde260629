@@ -428,7 +428,7 @@ export default function Dashboard() {
     setCardioLoading(true);
     setCardioError(null);
     try {
-      const res = await axios.get(`${API}/cardio-coach?user_id=default`);
+      const res = await axios.get(`${API}/cardio-coach?user_id=default&language=${lang}`);
       setCardioData(res.data);
     } catch (err) {
       console.error("CardioCoach fetch failed:", err);
@@ -436,7 +436,7 @@ export default function Dashboard() {
     } finally {
       setCardioLoading(false);
     }
-  }, []);
+  }, [lang]);
 
   useEffect(() => {
     fetchCardioData();

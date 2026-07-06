@@ -123,8 +123,9 @@ def _latest_with(metrics_docs: List[dict], key: str) -> Optional[dict]:
     return None
 
 
-async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
+async def compute_cardio_coach(db, user_id: str, language: str = "fr") -> Optional[dict]:
     """Build the cardio-coach payload from real Garmin data, or None if no data."""
+    lang = (language or "fr").lower()
     # --- Daily health metrics (most recent first) ---
     metrics_docs = await (
         db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
@@ -224,6 +225,21 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
         nw_label, nw_icon = "Rest Day", "rest"
     readiness_status = rec_color
 
+    # Localize the user-facing labels (fr default / es / en).
+    _REC_I18N = {
+        "RUN HARD": {"fr": "SÉANCE INTENSE", "es": "ENTRENO INTENSO"},
+        "EASY RUN": {"fr": "FOOTING FACILE", "es": "CARRERA SUAVE"},
+        "REST": {"fr": "REPOS", "es": "DESCANSO"},
+    }
+    _NW_I18N = {
+        "Intervals – 6 x 800 m": {"fr": "Fractionné – 6 x 800 m", "es": "Series – 6 x 800 m"},
+        "Easy Run – 45 min Z2": {"fr": "Footing facile – 45 min Z2", "es": "Carrera suave – 45 min Z2"},
+        "Rest Day": {"fr": "Jour de repos", "es": "Día de descanso"},
+    }
+    if lang != "en":
+        recommendation = _REC_I18N.get(recommendation, {}).get(lang, recommendation)
+        nw_label = _NW_I18N.get(nw_label, {}).get(lang, nw_label)
+
     # --- Statuses ---
     hrv_status = "green"
     if hrv_delta is not None:
@@ -233,19 +249,34 @@ async def compute_cardio_coach(db, user_id: str) -> Optional[dict]:
     load_status = "green" if 0.8 <= acwr <= 1.3 else ("yellow" if acwr <= 1.5 else "red")
     fatigue_status = "green" if fatigue_ratio <= 1.2 else ("yellow" if fatigue_ratio <= 1.5 else "red")
 
-    # --- Reasons (omit HRV when unavailable) ---
+    # --- Reasons (omit HRV when unavailable) — localized ---
     reasons = []
     if hrv_delta is not None:
         sign = "+" if hrv_delta >= 0 else ""
-        reasons.append(f"HRV deviation {sign}{hrv_delta:.1f} ms vs baseline")
+        _t = {"fr": f"Écart VFC {sign}{hrv_delta:.1f} ms vs référence",
+              "es": f"Desviación VFC {sign}{hrv_delta:.1f} ms vs referencia",
+              "en": f"HRV deviation {sign}{hrv_delta:.1f} ms vs baseline"}
+        reasons.append(_t.get(lang, _t["fr"]))
     else:
-        reasons.append("HRV not recorded by your Garmin device")
+        _t = {"fr": "VFC non enregistrée par votre appareil Garmin",
+              "es": "VFC no registrada por tu dispositivo Garmin",
+              "en": "HRV not recorded by your Garmin device"}
+        reasons.append(_t.get(lang, _t["fr"]))
     if have_rhr:
         sign = "+" if rhr_delta >= 0 else ""
-        reasons.append(f"RHR {sign}{rhr_delta:.1f} bpm vs baseline ({rhr_today:.0f} bpm)")
-    reasons.append(f"Sleep {sleep_hours_val:.1f} h")
-    reasons.append(f"Training Load (ACWR) {acwr:.2f}")
-    reasons.append(f"Fatigue Ratio {fatigue_ratio:.2f}")
+        _t = {"fr": f"FC de repos {sign}{rhr_delta:.1f} bpm vs référence ({rhr_today:.0f} bpm)",
+              "es": f"FC en reposo {sign}{rhr_delta:.1f} bpm vs referencia ({rhr_today:.0f} bpm)",
+              "en": f"RHR {sign}{rhr_delta:.1f} bpm vs baseline ({rhr_today:.0f} bpm)"}
+        reasons.append(_t.get(lang, _t["fr"]))
+    _t = {"fr": f"Sommeil {sleep_hours_val:.1f} h", "es": f"Sueño {sleep_hours_val:.1f} h",
+          "en": f"Sleep {sleep_hours_val:.1f} h"}
+    reasons.append(_t.get(lang, _t["fr"]))
+    _t = {"fr": f"Charge d'entraînement (ACWR) {acwr:.2f}", "es": f"Carga de entrenamiento (ACWR) {acwr:.2f}",
+          "en": f"Training Load (ACWR) {acwr:.2f}"}
+    reasons.append(_t.get(lang, _t["fr"]))
+    _t = {"fr": f"Ratio de fatigue {fatigue_ratio:.2f}", "es": f"Ratio de fatiga {fatigue_ratio:.2f}",
+          "en": f"Fatigue Ratio {fatigue_ratio:.2f}"}
+    reasons.append(_t.get(lang, _t["fr"]))
 
     # --- 7-day history (oldest -> newest) ---
     recent = list(reversed(metrics_docs[:7]))

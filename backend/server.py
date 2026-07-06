@@ -22,6 +22,7 @@ from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
 from config.secrets import MissingSecretError
+import localization
 
 # Import the analysis engine (NO LLM dependencies)
 from analysis_engine import (
@@ -2359,10 +2360,15 @@ async def get_mobile_workout_analysis(workout_id: str, language: str = "en", use
     
     # Generate analysis using LOCAL ENGINE (NO LLM)
     analysis = generate_session_analysis(workout, baseline, language)
-    
-    coach_summary = analysis["summary"]
-    insight = analysis["meaning"]
-    guidance = analysis["advice"]
+
+    # Localize the free-text fields into the user's language (cached, EN=no-op).
+    _loc = await localization.localize_fields(
+        {"summary": analysis["summary"], "meaning": analysis["meaning"], "advice": analysis["advice"]},
+        language, user_id,
+    )
+    coach_summary = _loc["summary"]
+    insight = _loc["meaning"]
+    guidance = _loc["advice"]
     
     return MobileAnalysisResponse(
         workout_id=workout_id,
@@ -2409,6 +2415,17 @@ async def get_detailed_analysis(workout_id: str, language: str = "en", user_id: 
     
     # Generate analysis using LOCAL ENGINE (NO LLM)
     analysis = generate_session_analysis(workout, baseline, language)
+
+    # Localize the free-text fields into the user's language (cached, EN=no-op).
+    _loc = await localization.localize_fields(
+        {"summary": analysis["summary"], "meaning": analysis["meaning"],
+         "recovery": analysis["recovery"], "advice": analysis["advice"]},
+        language, user_id,
+    )
+    analysis["summary"] = _loc["summary"]
+    analysis["meaning"] = _loc["meaning"]
+    analysis["recovery"] = _loc["recovery"]
+    analysis["advice"] = _loc["advice"]
     
     # Build header
     session_type = analysis.get("metrics", {}).get("session_type", "moderate")
@@ -2753,7 +2770,7 @@ _CARDIO_COACH_NO_DATA = {
 
 
 @api_router.get("/cardio-coach")
-async def get_cardio_coach(user_id: str = "default"):
+async def get_cardio_coach(user_id: str = "default", language: str = "fr"):
     """Return the full CardioCoach running-screen payload.
 
     Data source: 100% real Garmin (gccli). Resting HR + sleep come from gccli;
@@ -2776,7 +2793,7 @@ async def get_cardio_coach(user_id: str = "default"):
     if garmin_conn and garmin_conn.get("connected"):
         try:
             from garmin.insights import compute_cardio_coach
-            garmin_payload = await compute_cardio_coach(db, user_id)
+            garmin_payload = await compute_cardio_coach(db, user_id, language)
             if garmin_payload:
                 return garmin_payload
         except Exception as e:
