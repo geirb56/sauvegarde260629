@@ -65,7 +65,7 @@ You have access to ALL their real training data: complete session history, train
 - Performance analysis and predictions
 
 ⚠️ IMPORTANT:
-- ALWAYS respond in the user's language (FR or EN)
+- ALWAYS respond in the user's language (FR, EN or ES)
 - Don't use bullet points unless requested
 - Speak like a human coach, not like a report
 - Refer to specific sessions when relevant"""
@@ -98,7 +98,7 @@ Respond ONLY in valid JSON, without text before or after."""
 
 
 # Map language code -> a strong, explicit output-language directive.
-_LANG_NAMES = {"fr": "French (français)", "en": "English"}
+_LANG_NAMES = {"fr": "French (français)", "en": "English", "es": "Spanish (español)"}
 
 
 def _lang_directive(language: str) -> str:
