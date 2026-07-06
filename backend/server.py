@@ -2126,7 +2126,7 @@ async def get_rag_dashboard(user_id: str = "default"):
 
 
 @api_router.get("/rag/weekly-review")
-async def get_rag_weekly_review(user_id: str = "default"):
+async def get_rag_weekly_review(user_id: str = "default", language: str = "fr"):
     """Get RAG-enriched weekly review with GPT-4o-mini enhancement"""
     # Fetch workouts
     workouts = await db.workouts.find(
@@ -2149,7 +2149,8 @@ async def get_rag_weekly_review(user_id: str = "default"):
     # Enrichissement via coach_service (cascade LLM → déterministe)
     enriched_summary, used_llm = await coach_weekly_review(
         rag_result=result,
-        user_id=user_id
+        user_id=user_id,
+        language=language
     )
     
     return {
@@ -2165,7 +2166,7 @@ async def get_rag_weekly_review(user_id: str = "default"):
 
 
 @api_router.get("/rag/workout/{workout_id}")
-async def get_rag_workout_analysis(workout_id: str, user_id: str = "default"):
+async def get_rag_workout_analysis(workout_id: str, user_id: str = "default", language: str = "fr"):
     """Get RAG-enriched workout analysis with GPT-4o-mini enhancement"""
     # Fetch the workout
     workout = await db.workouts.find_one(
@@ -2192,7 +2193,8 @@ async def get_rag_workout_analysis(workout_id: str, user_id: str = "default"):
     enriched_summary, used_llm = await coach_analyze_workout(
         workout=workout,
         rag_result=result,
-        user_id=user_id
+        user_id=user_id,
+        language=language
     )
     
     return {

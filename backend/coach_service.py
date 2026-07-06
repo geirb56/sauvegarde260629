@@ -130,14 +130,15 @@ def _cleanup_cache(cache: dict) -> None:
 async def analyze_workout(
     workout: dict,
     rag_result: dict,
-    user_id: str = "default"
+    user_id: str = "default",
+    language: str = "fr"
 ) -> Tuple[str, bool]:
     """Session analysis with cache + metrics + cascade strategy."""
     start = time.time()
     metrics.total_requests += 1
     metrics.workout_requests += 1
     
-    cache_key = _cache_key(workout, "workout")
+    cache_key = _cache_key(workout, f"workout_{language}")
     if cache_key in _workout_cache:
         cached_result, timestamp = _workout_cache[cache_key]
         if _is_cache_valid(timestamp):
@@ -166,7 +167,8 @@ async def analyze_workout(
         
         enriched, success, meta = await enrich_workout_analysis(
             workout=workout_stats,
-            user_id=user_id
+            user_id=user_id,
+            language=language
         )
         
         if success and enriched:
@@ -190,7 +192,8 @@ async def analyze_workout(
 
 async def weekly_review(
     rag_result: dict,
-    user_id: str = "default"
+    user_id: str = "default",
+    language: str = "fr"
 ) -> Tuple[str, bool]:
     """Weekly review with cache + metrics + cascade strategy."""
     start = time.time()
@@ -199,7 +202,7 @@ async def weekly_review(
     
     m = rag_result.get("metrics", {})
     cache_data = {
-        "id": f"weekly_{m.get('nb_seances', 0)}_{m.get('km_total', 0)}",
+        "id": f"weekly_{language}_{m.get('nb_seances', 0)}_{m.get('km_total', 0)}",
         "distance_km": m.get("km_total", 0),
         "duration_minutes": m.get("duree_totale", 0),
     }
@@ -230,7 +233,8 @@ async def weekly_review(
         
         enriched, success, meta = await enrich_weekly_review(
             stats=weekly_stats,
-            user_id=user_id
+            user_id=user_id,
+            language=language
         )
         
         if success and enriched:

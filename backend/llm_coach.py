@@ -97,6 +97,17 @@ SYSTEM_PROMPT_PLAN = """You are an elite running coach specialized in periodizat
 Respond ONLY in valid JSON, without text before or after."""
 
 
+# Map language code -> a strong, explicit output-language directive.
+_LANG_NAMES = {"fr": "French (français)", "en": "English"}
+
+
+def _lang_directive(language: str) -> str:
+    lang = (language or "fr").lower()
+    name = _LANG_NAMES.get(lang, _LANG_NAMES["fr"])
+    return (f"\n\nCRITICAL: Write your ENTIRE response in {name}. "
+            f"Do not use any other language.")
+
+
 # ============================================================
 # ENRICHMENT FUNCTIONS
 # ============================================================
@@ -188,35 +199,37 @@ async def enrich_chat_response(
 
 ❓ ATHLETE'S QUESTION: {user_message}
 
-Respond in {language.upper()} as a caring and expert personal coach. Use the data above to personalize your response."""
+Respond in {language.upper()} as a caring and expert personal coach. Use the data above to personalize your response.{_lang_directive(language)}"""
 
-    return await _call_gpt(SYSTEM_PROMPT_COACH, prompt, user_id, "chat")
+    return await _call_gpt(SYSTEM_PROMPT_COACH + _lang_directive(language), prompt, user_id, "chat")
 
 
 async def enrich_weekly_review(
     stats: Dict,
-    user_id: str = "unknown"
+    user_id: str = "unknown",
+    language: str = "fr"
 ) -> Tuple[Optional[str], bool, Dict]:
-    """Enriches weekly review with GPT-4o-mini."""
+    """Enriches weekly review with GPT-4o-mini (in the requested language)."""
     prompt = f"""WEEKLY STATS:
 {_format_context(stats)}
 
-Generate a motivating and personalized weekly review based on this data."""
+Generate a motivating and personalized weekly review based on this data.{_lang_directive(language)}"""
 
-    return await _call_gpt(SYSTEM_PROMPT_BILAN, prompt, user_id, "bilan")
+    return await _call_gpt(SYSTEM_PROMPT_BILAN + _lang_directive(language), prompt, user_id, "bilan")
 
 
 async def enrich_workout_analysis(
     workout: Dict,
-    user_id: str = "unknown"
+    user_id: str = "unknown",
+    language: str = "fr"
 ) -> Tuple[Optional[str], bool, Dict]:
-    """Enriches workout analysis with GPT-4o-mini."""
+    """Enriches workout analysis with GPT-4o-mini (in the requested language)."""
     prompt = f"""SESSION DATA:
 {_format_context(workout)}
 
-Analyze this session as a caring running coach."""
+Analyze this session as a caring running coach.{_lang_directive(language)}"""
 
-    return await _call_gpt(SYSTEM_PROMPT_SEANCE, prompt, user_id, "seance")
+    return await _call_gpt(SYSTEM_PROMPT_SEANCE + _lang_directive(language), prompt, user_id, "seance")
 
 
 async def generate_cycle_week(

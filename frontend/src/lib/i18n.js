@@ -1179,8 +1179,8 @@ export const translations = {
 };
 
 export const getAppLanguage = () => {
-  // 1) User preference (localStorage) — only this overrides default
   if (typeof window !== "undefined") {
+    // 1) Explicit user preference (localStorage) always wins.
     try {
       const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
       if (stored && translations[stored]) {
@@ -1189,8 +1189,21 @@ export const getAppLanguage = () => {
     } catch {
       // Ignore storage errors
     }
-    // 2) No stored preference: default to English (no browser detection)
+    // 2) No stored preference: detect from the browser language.
+    try {
+      const nav = window.navigator;
+      const candidates = [nav?.language, ...(nav?.languages || [])].filter(Boolean);
+      for (const loc of candidates) {
+        const code = String(loc).slice(0, 2).toLowerCase();
+        if (translations[code]) {
+          return code;
+        }
+      }
+    } catch {
+      // Ignore detection errors
+    }
   }
+  // 3) Fallback.
   return "en";
 };
 
