@@ -302,6 +302,32 @@ function CircularGauge({ value, max = 100, size = 64 }) {
   );
 }
 
+function RunIndexPillar({ emoji, label, value, color }) {
+  const safeValue = Number.isFinite(value) ? value : 0;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+          <span className="text-base">{emoji}</span>
+          <span>{label}</span>
+        </div>
+        <span className="text-sm font-bold" style={{ color }}>
+          {safeValue}%
+        </span>
+      </div>
+      <div
+        className="h-2 rounded-full overflow-hidden"
+        style={{ background: "rgba(255,255,255,0.08)" }}
+      >
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${Math.max(0, Math.min(100, safeValue))}%`, background: color }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // Mini Line Chart Component
 function MiniLineChart({ data = [] }) {
   if (!data.length) return null;
@@ -484,13 +510,79 @@ export default function Dashboard() {
   // Calculate weekly progress
   const weeklyKmTarget = trainingMetrics?.load_28 ? Math.round(trainingMetrics.load_28 / 4 * 1.1) : 80;
   const weeklyProgress = Math.min(100, Math.round((weekStats.volume_km / weeklyKmTarget) * 100));
+  const runIndexData = insight?.run_index;
+  const runIndexScore = runIndexData?.run_index ?? 0;
+  const runIndexConfidence = runIndexData?.confidence_score ?? 0;
 
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
 
+      {runIndexData && (
+        <div
+          className="rounded-3xl p-5 space-y-4 animate-in"
+          style={{
+            background: "linear-gradient(135deg, #111827 0%, #1f2937 45%, #312e81 100%)",
+            border: "1px solid rgba(129, 140, 248, 0.28)",
+            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
+          }}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#a5b4fc" }}>
+                {t("dashboard.runIndex")}
+              </p>
+              <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+                {t("dashboard.runIndexOverall")}
+              </h2>
+              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexDescription")}
+              </p>
+            </div>
+            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(255,255,255,0.08)", color: "#e0e7ff" }}>
+              {t("progress.confidence")}: {runIndexConfidence}%
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="flex items-end gap-2">
+                <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
+                  {runIndexScore}
+                </span>
+                <span className="text-xl font-semibold pb-1" style={{ color: "#c7d2fe" }}>
+                  / 1000
+                </span>
+              </div>
+              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexLevel")}
+              </p>
+            </div>
+
+            <div className="md:text-right">
+              <p className="text-xs uppercase tracking-[0.2em]" style={{ color: "#a5b4fc" }}>
+                {t("dashboard.runIndexVsReadinessTitle")}
+              </p>
+              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexVsReadinessBody")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3">
+            <RunIndexPillar emoji="⚡" label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
+            <RunIndexPillar emoji="🫀" label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
+            <RunIndexPillar emoji="📈" label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#22c55e" />
+            <RunIndexPillar emoji="🧠" label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#8b5cf6" />
+          </div>
+        </div>
+      )}
+
       {/* ── RUN RECOMMENDATION SECTION ────────────────────────────────────── */}
       <div className="animate-in" style={{ animationDelay: "300ms" }}>
         <h2 className="section-header">{t("dashboard.runReadiness")}</h2>
+        <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
+          {t("dashboard.runReadinessDescription")}
+        </p>
       </div>
 
       {cardioLoading ? (
