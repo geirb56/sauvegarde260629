@@ -88,6 +88,7 @@ from demo_mode import get_demo_subscription, is_subscription_active, patch_subsc
 
 # Import physiological engine dashboard router
 from api.dashboard import dashboard_router
+from engine.run_index_engine import calculate_run_index
 
 # Import Terra integration module
 from terra_integration import (
@@ -968,6 +969,7 @@ class DashboardInsightResponse(BaseModel):
     week: dict
     month: dict
     recovery_score: Optional[dict] = None  # New: recovery score
+    run_index: Optional[dict] = None
 
 
 # ========== RECOVERY SCORE CALCULATION ==========
@@ -1292,6 +1294,20 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
     
     # Calculate recovery score
     recovery_score = calculate_recovery_score(all_workouts, language)
+    run_index = calculate_run_index(all_workouts)
+
+    await db.run_index_scores.update_one(
+        {"user_id": user_id, "date": datetime.now(timezone.utc).date().isoformat()},
+        {
+            "$set": {
+                "user_id": user_id,
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "computed_at": datetime.now(timezone.utc).isoformat(),
+                **run_index,
+            }
+        },
+        upsert=True,
+    )
     
     # Generate insight using local engine (NO LLM)
     coach_insight = generate_dashboard_insight(
@@ -1305,7 +1321,8 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
         coach_insight=coach_insight,
         week=week_stats,
         month=month_stats,
-        recovery_score=recovery_score
+        recovery_score=recovery_score,
+        run_index=run_index,
     )
     
     # Store in cache
@@ -5349,6 +5366,7 @@ async def create_db_indexes():
         await db.baselines.create_index("user_id", sparse=True)
         await db.training_load.create_index([("user_id", 1), ("date", -1)])
         await db.recovery_scores.create_index([("user_id", 1), ("date", -1)])
+        await db.run_index_scores.create_index([("user_id", 1), ("date", -1)])
         await db.workout_recommendations.create_index([("user_id", 1), ("date", -1)])
         # Garmin connector collections
         await db.garmin_connections.create_index("user_id", unique=True, sparse=True)
