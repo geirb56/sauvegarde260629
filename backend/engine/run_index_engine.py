@@ -270,8 +270,9 @@ def calculate_endurance_score(
     long_run_paces = [run["avg_pace_min_km"] for run in long_runs if run["avg_pace_min_km"]]
     long_run_cv = None
     if len(long_run_paces) >= 2:
+        long_run_mean_pace = mean(long_run_paces)
         stdev = _safe_stdev(long_run_paces)
-        long_run_cv = (stdev / mean(long_run_paces)) if stdev is not None and mean(long_run_paces) else None
+        long_run_cv = (stdev / long_run_mean_pace) if stdev is not None and long_run_mean_pace else None
     pace_stability_score = 60.0 if long_run_cv is None else _normalize_inverse(long_run_cv, 0.02, 0.18)
     durability_score = 0.65 * long_run_frequency_score + 0.35 * pace_stability_score
 

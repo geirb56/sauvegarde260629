@@ -303,7 +303,7 @@ function CircularGauge({ value, max = 100, size = 64 }) {
 }
 
 function RunIndexPillar({ emoji, label, value, color }) {
-  const safeValue = typeof value === "number" ? value : 0;
+  const safeValue = Number.isFinite(value) ? value : 0;
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
